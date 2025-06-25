@@ -1,6 +1,9 @@
-use std::io::{BufRead, BufReader, Write};
+use std::{
+    io::{BufRead, BufReader, Write},
+    sync::{Arc, Mutex},
+};
 
-use kleindb::{SQLite3, SQLite3Stmt};
+use kleindb::{KleinDBContext, SQLite3, SQLite3Stmt, compiler::prepare::sqlite3_prepare_v2};
 
 const MAIN_PROMPT: &str = "sqlite> ";
 const CONTINUATION_PROMPT: &str = "   ...> ";
@@ -23,8 +26,8 @@ enum ShellOpenModes {
 }
 
 struct ShellState<'a> {
-    /// The database
-    db: &'a SQLite3,
+    /// Kleindb Context
+    ctx: &'a KleinDBContext,
 
     /// Current statement if any
     p_stmt: &'a SQLite3Stmt,
@@ -158,6 +161,7 @@ impl ShellState<'_> {
                     n_sql = 0;
                     // Try to execute sql
                     self.run_one_sql_line(&z_sql, startline);
+                    z_sql.clear();
                 }
             } else {
                 break;
@@ -190,10 +194,13 @@ impl ShellState<'_> {
     }
 
     /// Run a single line of SQL.  Return the number of errors.
-    fn run_one_sql_line(&self, z_sql: &str, startline: usize) {}
+    fn run_one_sql_line(&self, z_sql: &str, startline: usize) {
+        let _ = self.shell_exec(z_sql);
+    }
 
     /// Execute a statement or set of statements.
     fn shell_exec(&self, z_sql: &str) -> Result<(), ShellExecError> {
+        sqlite3_prepare_v2(self.ctx, z_sql);
         Ok(())
     }
 }
@@ -202,11 +209,13 @@ fn main() {
     // let warn_in_memory_db = false;
     // let read_stdin = true;
 
-    let db = SQLite3 {};
+    let ctx = KleinDBContext {
+        db: Arc::new(Mutex::new(SQLite3 {})),
+    };
     let p_stmt = SQLite3Stmt {};
 
     let mut shell_state = ShellState {
-        db: &db,
+        ctx: &ctx,
         p_stmt: &p_stmt,
         inp: Box::new(BufReader::new(std::io::stdin())),
         out: Box::new(std::io::stdout()),

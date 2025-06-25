@@ -5,7 +5,7 @@ pub mod compiler;
 /// This context will be passed around throughout the lifetime
 /// of a sql query
 pub struct KleinDBContext {
-    db: Arc<Mutex<SQLite3>>,
+    pub db: Arc<Mutex<SQLite3>>,
 }
 
 /// An SQL parser context. A copy of this structure is passed through

@@ -4,11 +4,13 @@
 
 use std::sync::Arc;
 
-use crate::{KleinDBContext, Parse, SQLite3};
+use chumsky::Parser;
+
+use crate::{KleinDBContext, Parse, SQLite3, compiler::parser::parser};
 
 /// Compile the UTF-8 encoded SQL statement zSql into a statement handle.
 fn sqlite3_prepare(db: &SQLite3, z_sql: &str) {
-  let mut s_parse = Parse {};
+    let s_parse = Parse {};
 }
 
 fn sqlite3_lock_and_prepare(ctx: &KleinDBContext, z_sql: &str) {
@@ -17,6 +19,8 @@ fn sqlite3_lock_and_prepare(ctx: &KleinDBContext, z_sql: &str) {
 
     // Do this until it succeeds or encounters a permanent error
     sqlite3_prepare(&db, z_sql);
+
+    println!("{:?}", parser().parse(z_sql));
 }
 
 pub fn sqlite3_prepare_v2(ctx: &KleinDBContext, z_sql: &str) {
