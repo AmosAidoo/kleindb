@@ -8,12 +8,14 @@ use chumsky::Parser;
 
 use crate::{
   KleinDBContext, Parse, SQLite3, SQLite3Stmt,
-  compiler::{codegen::generate_bytecode, parser::parser},
+  compiler::{codegen::generate_bytecode, parser::parser, tokenizer},
 };
 
 /// Compile the UTF-8 encoded SQL statement zSql into a statement handle.
 fn sqlite3_prepare(db: &SQLite3, z_sql: &str) -> SQLite3Stmt {
-  let ast = parser().parse(z_sql).unwrap();
+  let tokens = tokenizer::tokenize(z_sql);
+
+  let ast = parser().parse(&tokens).unwrap();
   println!("{:?}", ast);
 
   let bytecode = generate_bytecode(db, ast);

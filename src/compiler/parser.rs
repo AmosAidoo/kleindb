@@ -1,206 +1,193 @@
-//! Reading https://www.sqlite.org/lang.html
-//! SQL As Understood By SQLite
+//! Trying to port grammar from parse.y
 use chumsky::prelude::*;
 
-use crate::Token;
+use crate::{Token, TokenType};
 
 #[derive(Debug, PartialEq)]
-pub enum SQLStmtList {
-  SemiColon(Option<Box<SQLStmtList>>),
-  SQLStmt(SQLStmt, Box<SQLStmtList>),
+pub struct Select<'a> {
+  expr_list: ExprList<'a>,
 }
 
+/// Each node of an expression in the parse tree is an instance
+/// of this structure.
 #[derive(Debug, PartialEq)]
-pub enum SQLStmt {
-  Select(SelectStmt),
-}
+pub struct Expr<'a> {
+  // combination of Expr.op and Expr.u.zToken
+  token: Token<'a>,
 
-#[derive(Debug, PartialEq)]
-pub enum ResultColumn {
-  Expr(Expr),
-  Star,
-}
+  /// Left subnode
+  p_left: Option<Box<Expr<'a>>>,
 
-#[derive(Debug, PartialEq)]
-pub struct SelectStmt {
-  result_column: ResultColumn,
+  /// Right subnode
+  p_right: Option<Box<Expr<'a>>>,
 }
 
 #[derive(Debug, PartialEq)]
-pub enum Expr {
-  LiteralValue(LiteralValue),
-  // Binary(Box<Expr<'a>>, BinaryOperator, Box<Expr<'a>>),
-  Term,
-  Parenthesized(Box<Expr>),
-  Identifier,
-  Null,
-  Float,
-  Blob,
-  String,
-  Integer,
-  // Variable {
-  //   name: &'a str,
-  // },
+pub struct ExprListItem<'a> {
+  /// parse tree for expression
+  p_expr: Expr<'a>,
+}
+
+/// A list of expressions.  Each expression may optionally have a
+/// name. An expr/name combination can be used in several ways, such
+/// as the list of "expr AS ID" fields following a "SELECT" or in the
+/// list of "ID = expr" items in an UPDATE.
+#[derive(Debug, PartialEq)]
+pub struct ExprList<'a> {
+  items: Vec<ExprListItem<'a>>,
 }
 
 #[derive(Debug, PartialEq)]
-pub enum LiteralValue {
-  Numeric(f64),
-  String,
-  Blob,
-  Null,
-  True,
-  False,
-  CurrentTime,
-  CurrentDate,
-  CurrentTimestamp,
+pub struct SQLCmdList<'a> {
+  list: Vec<Cmd<'a>>,
 }
 
+/// A single SQL command
 #[derive(Debug, PartialEq)]
-pub enum BinaryOperator {
-  Addition,
-  Subtraction,
-  Multiplication,
-  Division,
+pub enum Cmd<'a> {
+  Semi,
+  Select(Select<'a>),
 }
 
-#[derive(Debug)]
-pub enum Keywords {
-  Select,
+fn parse_expr<'a>()
+-> impl Parser<'a, &'a [Token<'a>], Expr<'a>, extra::Err<Rich<'a, Token<'a>>>> + Clone {
+  let any_term = |tt: TokenType| {
+    any()
+      .filter(move |t: &Token| t.token_type == tt)
+      .map(|t| Expr {
+        token: t,
+        p_left: None,
+        p_right: None,
+      })
+  };
+
+  let null = any_term(TokenType::NULL);
+  let float = any_term(TokenType::Float);
+  let blob = any_term(TokenType::Blob);
+  let integer = any_term(TokenType::Integer);
+  let string = any_term(TokenType::String);
+
+  let expr = recursive(|expr| choice((null, float, blob, string, integer)));
+
+  expr
 }
 
-fn digit_parser<'a>() -> impl Parser<'a, &'a str, char> + Clone {
-  any().filter(|c: &char| c.is_ascii_digit())
+fn parse_selcollist<'a>()
+-> impl Parser<'a, &'a [Token<'a>], ExprList<'a>, extra::Err<Rich<'a, Token<'a>>>> + Clone {
+  let expr = parse_expr().padded_by(whitespace().repeated());
+  let comma = any()
+    .filter(|t: &Token<'a>| t.token_type == TokenType::Comma)
+    .padded_by(whitespace().repeated());
+
+  choice((expr.clone(), comma.ignore_then(expr)))
+    .repeated()
+    .at_least(1)
+    .collect::<Vec<_>>()
+    .map(|exprs| {
+      exprs
+        .into_iter()
+        .fold(ExprList { items: vec![] }, |mut acc, curr| {
+          acc.items.push(ExprListItem { p_expr: curr });
+          acc
+        })
+    })
 }
 
-fn numeric_literal_parser<'a>() -> impl Parser<'a, &'a str, String> + Clone {
-  digit_parser().repeated().at_least(1).collect::<String>()
+fn whitespace<'a>() -> impl Parser<'a, &'a [Token<'a>], (), extra::Err<Rich<'a, Token<'a>>>> + Clone
+{
+  any()
+    .filter(|token: &Token| token.token_type == TokenType::Space)
+    .ignored()
 }
 
-fn literal_value_parser<'a>() -> impl Parser<'a, &'a str, LiteralValue> + Clone {
-  let numeric_literal =
-    numeric_literal_parser().map(|num| LiteralValue::Numeric(num.parse().unwrap()));
-  numeric_literal
+fn parse_oneselect<'a>()
+-> impl Parser<'a, &'a [Token<'a>], Select<'a>, extra::Err<Rich<'a, Token<'a>>>> + Clone {
+  let selcollist = parse_selcollist();
+
+  any()
+    .filter(|token: &Token| token.token_type == TokenType::SELECT)
+    .ignored()
+    .padded_by(whitespace().repeated())
+    .then(selcollist)
+    .map(|(_, expr_list)| Select { expr_list })
 }
 
-fn expr_parser<'a>() -> impl Parser<'a, &'a str, Expr> + Clone {
-  let literal_value = literal_value_parser().map(|lv| Expr::LiteralValue(lv));
-  literal_value
+fn parse_select<'a>()
+-> impl Parser<'a, &'a [Token<'a>], Select<'a>, extra::Err<Rich<'a, Token<'a>>>> + Clone {
+  parse_oneselect()
 }
 
-fn result_column_parser<'a>() -> impl Parser<'a, &'a str, ResultColumn> + Clone {
-  expr_parser().map(|expr| ResultColumn::Expr(expr))
-}
+pub fn parser<'a>()
+-> impl Parser<'a, &'a [Token<'a>], SQLCmdList<'a>, extra::Err<Rich<'a, Token<'a>>>> {
+  let semi = any().filter(|t: &Token| t.is_semi());
 
-fn select_stmt_parser<'a>() -> impl Parser<'a, &'a str, SelectStmt> + Clone {
-  let result_column = result_column_parser();
-
-  let select_stmt = text::ascii::keyword("SELECT")
-    .padded()
-    .ignore_then(result_column)
-    .map(|result_column| SelectStmt { result_column });
-  select_stmt
-}
-
-pub fn parser<'a>() -> impl Parser<'a, &'a str, SQLStmtList> {
-  let select_stmt = select_stmt_parser();
-
-  let sql_stmt = select_stmt.map(|select| SQLStmt::Select(select));
-
-  let sql_stmt_list = recursive(|sql_stmt_list| {
-    let stmt_with_semi_colon =
-      sql_stmt
-        .then_ignore(just(";"))
-        .padded()
-        .then(sql_stmt_list.clone().repeated().collect::<Vec<_>>())
-        .map(|(sql_stmt, stmt_list)| {
-          SQLStmtList::SQLStmt(
-            sql_stmt,
-            stmt_list.into_iter().rev().fold(
-              Box::new(SQLStmtList::SemiColon(None)),
-              |acc, curr| match curr {
-                SQLStmtList::SQLStmt(stmt, _) => Box::new(SQLStmtList::SQLStmt(stmt, acc)),
-                SQLStmtList::SemiColon(list) => {
-                  if let Some(lst) = list {
-                    Box::new(SQLStmtList::SemiColon(Some(lst)))
-                  } else {
-                    Box::new(SQLStmtList::SemiColon(None))
-                  }
-                }
-              },
-            ),
-          )
-        });
-
-    let semi_colon_with_stmt = just(";")
-      .padded()
-      .then(sql_stmt_list.clone().repeated().collect::<Vec<_>>())
-      .map(|(_semi, stmt_list)| {
-        stmt_list
-          .into_iter()
-          .rev()
-          .fold(SQLStmtList::SemiColon(None), |acc, curr| match curr {
-            SQLStmtList::SQLStmt(stmt, _) => SQLStmtList::SQLStmt(stmt, Box::new(acc)),
-            SQLStmtList::SemiColon(list) => {
-              if let Some(lst) = list {
-                SQLStmtList::SemiColon(Some(lst))
-              } else {
-                SQLStmtList::SemiColon(None)
-              }
-            }
-          })
-      });
-    stmt_with_semi_colon.or(semi_colon_with_stmt)
+  let cmd = choice((
+    semi.clone().map(|_| Cmd::Semi),
+    parse_select()
+      .then_ignore(semi.clone())
+      .map(|node| Cmd::Select(node)),
+  ))
+  .padded_by(whitespace().repeated())
+  .repeated()
+  .at_least(1)
+  .collect::<Vec<_>>()
+  .map(|cmds| SQLCmdList {
+    list: cmds
+      .into_iter()
+      .filter(|cmd| !matches!(cmd, Cmd::Semi))
+      .collect(),
   });
 
-  sql_stmt_list
+  cmd
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::compiler::tokenizer;
+
+  const SQL: &str = "SELECT 1, 2, 3;";
 
   #[test]
-  fn test_digit() {
-    let res = digit_parser().parse("1");
-    assert_eq!(res.output(), Some(&'1'))
-  }
-
-  #[test]
-  fn test_numeric_literal() {
-    let res = numeric_literal_parser().parse("123");
-    assert_eq!(res.output(), Some(&"123".to_string()))
-  }
-
-  fn create_test_result_column() -> ResultColumn {
-    ResultColumn::Expr(Expr::LiteralValue(LiteralValue::Numeric(123.0)))
-  }
-
-  #[test]
-  fn test_result_column() {
-    let res = result_column_parser().parse("123");
-    assert_eq!(res.output(), Some(&create_test_result_column()));
-  }
-
-  #[test]
-  fn test_select_stmt() {
-    let res = select_stmt_parser().parse("SELECT 123");
-    let select_stmt = SelectStmt {
-      result_column: create_test_result_column(),
-    };
-    assert_eq!(res.output(), Some(&select_stmt));
-  }
-
-  #[test]
-  fn test_parser() {
-    let res = parser().parse("SELECT 123;\n");
-    let select_stmt = SelectStmt {
-      result_column: create_test_result_column(),
-    };
-    let sql_stmt_list = SQLStmtList::SQLStmt(
-      SQLStmt::Select(select_stmt),
-      Box::new(SQLStmtList::SemiColon(None)),
-    );
-    assert_eq!(res.output(), Some(&sql_stmt_list));
+  fn test_parse_simple_select_into_ast() {
+    let tokens = tokenizer::tokenize(SQL);
+    let ast = parser().parse(&tokens).unwrap();
+    let list = vec![Cmd::Select(Select {
+      expr_list: ExprList {
+        items: vec![
+          ExprListItem {
+            p_expr: Expr {
+              token: Token {
+                text: "1",
+                token_type: TokenType::Integer,
+              },
+              p_left: None,
+              p_right: None,
+            },
+          },
+          ExprListItem {
+            p_expr: Expr {
+              token: Token {
+                text: "2",
+                token_type: TokenType::Integer,
+              },
+              p_left: None,
+              p_right: None,
+            },
+          },
+          ExprListItem {
+            p_expr: Expr {
+              token: Token {
+                text: "3",
+                token_type: TokenType::Integer,
+              },
+              p_left: None,
+              p_right: None,
+            },
+          },
+        ],
+      },
+    })];
+    assert_eq!(ast, SQLCmdList { list });
   }
 }

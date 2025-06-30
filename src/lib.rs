@@ -10,7 +10,7 @@ pub struct KleinDBContext {
   pub db: Arc<Mutex<SQLite3>>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum TokenType {
   LeftParen,
   RightParen,
@@ -185,11 +185,17 @@ pub enum TokenType {
   UNIQUE,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 /// Each token coming out of the lexer is an instance of this structure
 pub struct Token<'a> {
   pub text: &'a str,
   pub token_type: TokenType,
+}
+
+impl<'a> Token<'a> {
+  pub fn is_semi(&self) -> bool {
+    self.token_type == TokenType::Semi
+  }
 }
 
 /// An SQL parser context. A copy of this structure is passed through

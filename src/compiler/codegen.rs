@@ -1,5 +1,5 @@
-use crate::{SQLite3, VdbeOp, compiler::parser::SQLStmtList};
+use crate::{SQLite3, VdbeOp, compiler::parser::SQLCmdList};
 
-pub fn generate_bytecode(db: &SQLite3, ast: SQLStmtList) -> Vec<VdbeOp> {
+pub fn generate_bytecode(db: &SQLite3, ast: SQLCmdList) -> Vec<VdbeOp> {
   vec![]
 }
