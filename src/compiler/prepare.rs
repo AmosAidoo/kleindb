@@ -15,15 +15,20 @@ use crate::{
 fn sqlite3_prepare(db: &SQLite3, z_sql: &str) -> SQLite3Stmt {
   let tokens = tokenizer::tokenize(z_sql);
 
+  // Similar to sqlite3RunParser()
   let ast = parser().parse(&tokens).unwrap();
   println!("{:?}", ast);
 
-  let bytecode = generate_bytecode(db, ast);
+  let mut p_parse = Parse {
+    db,
+    vdbe: SQLite3Stmt::new(),
+    n_mem: 0,
+  };
+  generate_bytecode(&mut p_parse, ast);
 
-  SQLite3Stmt {
-    pc: 0,
-    a_op: bytecode,
-  }
+  // TODO: Final checks, error handling comes here
+
+  p_parse.vdbe
 }
 
 fn sqlite3_lock_and_prepare(ctx: &KleinDBContext, z_sql: &str) {
