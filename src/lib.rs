@@ -238,6 +238,19 @@ pub struct VdbeOp {
   pub p3: i32,
 }
 
+#[derive(Clone)]
+pub enum MemValue {
+  Undefined,
+  Integer(i32),
+  Real(f64),
+}
+
+/// These are Mems
+#[derive(Clone)]
+pub struct SQLite3Value {
+  pub value: MemValue,
+}
+
 /// AKA VDBE
 pub struct SQLite3Stmt {
   /// The program counter
@@ -245,6 +258,12 @@ pub struct SQLite3Stmt {
 
   /// Space to hold the virtual machine's program
   pub a_op: Vec<VdbeOp>,
+
+  /// The memory locations
+  pub a_mem: Vec<SQLite3Value>,
+
+  /// Index in a_mem to start reading result from
+  pub result_row: usize,
 }
 
 impl SQLite3Stmt {
@@ -253,6 +272,15 @@ impl SQLite3Stmt {
     let mut stmt = Self {
       pc: 0,
       a_op: vec![],
+      // Not sure how many or what determines the number so I
+      // am making an initial guess till I figure it out
+      a_mem: vec![
+        SQLite3Value {
+          value: MemValue::Undefined
+        };
+        20
+      ],
+      result_row: 0,
     };
     stmt.sqlite3_add_op2(Opcode::Init, 0, 1);
     stmt
