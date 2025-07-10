@@ -1,11 +1,11 @@
 //! Trying to port grammar from parse.y
 use chumsky::prelude::*;
 
-use crate::{Token, TokenType};
+use crate::{Opcode, Parse, Token, TokenType};
 
 #[derive(Debug, PartialEq)]
 pub struct Select<'a> {
-  expr_list: ExprList<'a>,
+  pub expr_list: ExprList<'a>,
 }
 
 /// Each node of an expression in the parse tree is an instance
@@ -13,19 +13,19 @@ pub struct Select<'a> {
 #[derive(Debug, PartialEq)]
 pub struct Expr<'a> {
   // combination of Expr.op and Expr.u.zToken
-  token: Token<'a>,
+  pub token: Token<'a>,
 
   /// Left subnode
-  p_left: Option<Box<Expr<'a>>>,
+  pub p_left: Option<Box<Expr<'a>>>,
 
   /// Right subnode
-  p_right: Option<Box<Expr<'a>>>,
+  pub p_right: Option<Box<Expr<'a>>>,
 }
 
 #[derive(Debug, PartialEq)]
 pub struct ExprListItem<'a> {
   /// parse tree for expression
-  p_expr: Expr<'a>,
+  pub p_expr: Expr<'a>,
 }
 
 /// A list of expressions.  Each expression may optionally have a
@@ -34,12 +34,12 @@ pub struct ExprListItem<'a> {
 /// list of "ID = expr" items in an UPDATE.
 #[derive(Debug, PartialEq)]
 pub struct ExprList<'a> {
-  items: Vec<ExprListItem<'a>>,
+  pub items: Vec<ExprListItem<'a>>,
 }
 
 #[derive(Debug, PartialEq)]
 pub struct SQLCmdList<'a> {
-  list: Vec<Cmd<'a>>,
+  pub list: Vec<Cmd<'a>>,
 }
 
 /// A single SQL command
@@ -139,6 +139,21 @@ pub fn parser<'a>()
   });
 
   cmd
+}
+
+/// This routine is called after a single SQL statement has been
+/// parsed and a VDBE program to execute that statement has been
+/// prepared.  This routine puts the finishing touches on the
+/// VDBE program and resets the pParse structure for the next
+/// parse.
+pub fn sqlite3_finish_coding(p_parse: &mut Parse) {
+  let vdbe = &mut p_parse.vdbe;
+
+  vdbe.sqlite3_add_op0(Opcode::Halt);
+  vdbe.sqlite3_vdbe_jump_here(0);
+
+  // Finally, jump back to the beginning of the executable code
+  vdbe.sqlite3_vdbe_goto(1);
 }
 
 #[cfg(test)]
