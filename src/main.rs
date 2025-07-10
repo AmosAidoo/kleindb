@@ -4,7 +4,8 @@ use std::{
 };
 
 use kleindb::{
-  KleinDBContext, SQLite3, SQLite3Stmt, compiler::prepare::sqlite3_prepare_v2, is_id_char,
+  KleinDBContext, SQLite3, StepStatus, compiler::prepare::sqlite3_prepare_v2,
+  is_id_char,
 };
 
 const MAIN_PROMPT: &str = "sqlite> ";
@@ -29,7 +30,7 @@ enum ShellOpenModes {
 
 struct ShellState<'a> {
   /// Kleindb Context
-  ctx: &'a KleinDBContext,
+  ctx: &'a mut KleinDBContext,
 
   /// Current statement if any
   // p_stmt: &'a SQLite3Stmt,
@@ -187,14 +188,41 @@ impl ShellState<'_> {
   }
 
   /// Run a single line of SQL.  Return the number of errors.
-  fn run_one_sql_line(&self, z_sql: &str, startline: usize) {
+  fn run_one_sql_line(&mut self, z_sql: &str, startline: usize) {
     let _ = self.shell_exec(z_sql);
   }
 
   /// Execute a statement or set of statements.
-  fn shell_exec(&self, z_sql: &str) -> Result<(), ShellExecError> {
-    sqlite3_prepare_v2(self.ctx, z_sql);
+  fn shell_exec(&mut self, z_sql: &str) -> Result<(), ShellExecError> {
+    let stmt = sqlite3_prepare_v2(self.ctx, z_sql);
+    println!("{:?}", stmt.a_op);
+    self.ctx.set_vdbe(stmt);
+    self.exec_prepared_stmt();
     Ok(())
+  }
+
+  fn exec_prepared_stmt(&mut self) {
+    let mut rc = self.ctx.sqlite3_step();
+    let n_column = self.ctx.vdbe.as_ref().unwrap().sqlite3_column_count();
+
+    if let Ok(status) = rc.as_mut() {
+      println!("status: {:?}, n_column: {}", status, n_column);
+      if matches!(status, StepStatus::Row) {
+        while matches!(status, StepStatus::Row) {
+          let p_stmt = self.ctx.vdbe.as_ref().unwrap();
+          for i in 0..n_column {
+            let buf = p_stmt.sqlite3_column_text(i).bytes().collect::<Vec<_>>();
+            let _ = self.out.write_all(&buf);
+            if i != n_column - 1 {
+              let _ = self.out.write_all(b" | ");
+            }
+          }
+          let _ = self.out.write_all(b"\n");
+          let _ = self.out.flush();
+          *status = self.ctx.sqlite3_step().unwrap();
+        }
+      }
+    }
   }
 }
 
@@ -202,13 +230,14 @@ fn main() {
   // let warn_in_memory_db = false;
   // let read_stdin = true;
 
-  let ctx = KleinDBContext {
+  let mut ctx = KleinDBContext {
     db: Arc::new(Mutex::new(SQLite3 {})),
+    vdbe: None,
   };
   // let p_stmt = SQLite3Stmt {};
 
   let mut shell_state = ShellState {
-    ctx: &ctx,
+    ctx: &mut ctx,
     // p_stmt: &p_stmt,
     inp: Box::new(BufReader::new(std::io::stdin())),
     out: Box::new(std::io::stdout()),

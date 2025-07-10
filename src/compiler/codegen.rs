@@ -126,6 +126,9 @@ fn select_inner_loop(p_parse: &mut Parse, select: Select, src_tab: i32, dest: &m
 
 // Generate byte-code for the SELECT statement
 fn sqlite3_select(p_parse: &mut Parse, select: Select, dest: &mut SelectDest) {
+  // sqlite3GenerateColumnNames does this but not implemented yet
+  p_parse.vdbe.n_res_column = select.expr_list.items.len();
+
   select_inner_loop(p_parse, select, -1, dest);
 }
 

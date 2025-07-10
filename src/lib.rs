@@ -1,15 +1,39 @@
 use std::sync::{Arc, Mutex};
 
 pub mod compiler;
-pub mod vm;
 
 const SQLITE_DIGIT_SEPARATOR: u8 = b'_';
+
+#[derive(Debug)]
+pub enum StepStatus {
+  Ok,
+  Row,
+  Done,
+}
 
 /// This context will be passed around throughout the lifetime
 /// of a sql query
 pub struct KleinDBContext {
   pub db: Arc<Mutex<SQLite3>>,
   pub vdbe: Option<SQLite3Stmt>,
+}
+
+impl KleinDBContext {
+  pub fn sqlite3_step(&mut self) -> Result<StepStatus, ()> {
+    // TODO: Enter db mutex
+    // TODO: Retry if schema changes
+    if let Some(vdbe) = &mut self.vdbe {
+      Ok(vdbe.sqlite3_step())
+    } else {
+      Err(())
+    }
+  }
+}
+
+impl KleinDBContext {
+  pub fn set_vdbe(&mut self, p_stmt: SQLite3Stmt) {
+    self.vdbe = Some(p_stmt);
+  }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -220,6 +244,7 @@ pub struct Parse<'a> {
 /// Each database connection is an instance of the following structure.
 pub struct SQLite3 {}
 
+#[derive(Debug)]
 pub enum Opcode {
   Init,
   Integer,
@@ -231,6 +256,7 @@ pub enum Opcode {
 /// A single instruction of the virtual machine has an opcode
 /// and as many as three operands.  The instruction is recorded
 /// as an instance of the following structure:
+#[derive(Debug)]
 pub struct VdbeOp {
   pub opcode: Opcode,
   pub p1: i32,
@@ -264,6 +290,8 @@ pub struct SQLite3Stmt {
 
   /// Index in a_mem to start reading result from
   pub result_row: usize,
+
+  pub n_res_column: usize,
 }
 
 impl SQLite3Stmt {
@@ -281,6 +309,7 @@ impl SQLite3Stmt {
         20
       ],
       result_row: 0,
+      n_res_column: 0,
     };
     stmt.sqlite3_add_op2(Opcode::Init, 0, 1);
     stmt
@@ -326,6 +355,69 @@ impl SQLite3Stmt {
   /// Generate code for an unconditional jump to instruction iDest
   pub fn sqlite3_vdbe_goto(&mut self, i_dest: i32) -> usize {
     self.sqlite3_add_op3(Opcode::Goto, 0, i_dest, 0)
+  }
+
+  pub fn sqlite3_column_count(&self) -> usize {
+    self.n_res_column
+  }
+
+  pub fn sqlite3_column_text(&self, i: usize) -> String {
+    match self.a_mem[self.result_row + i].value {
+      MemValue::Undefined => String::from("undefined"),
+      MemValue::Integer(x) => x.to_string(),
+      MemValue::Real(x) => x.to_string(),
+    }
+  }
+
+  /// Execute as much of a VDBE program as we can.
+  /// This is the core of sqlite3_step().
+  fn sqlite3_vdbe_exec(&mut self) -> StepStatus {
+    let n = self.a_op.len() as i32;
+    let mut step_pc: usize = self.pc;
+
+    let mut status = StepStatus::Ok;
+    loop {
+      let p_op = &mut self.a_op[step_pc];
+      match p_op.opcode {
+        Opcode::Init => {
+          p_op.p1 += 1;
+          // Jump to p2
+          assert!(p_op.p2 > 0);
+          assert!(p_op.p2 < n);
+          step_pc = p_op.p2 as usize;
+        }
+        Opcode::Integer => {
+          self.a_mem[p_op.p2 as usize].value = MemValue::Integer(p_op.p1);
+          step_pc += 1;
+        }
+        Opcode::ResultRow => {
+          // TODO: bound checks
+
+          self.result_row = p_op.p1 as usize;
+          self.pc = step_pc + 1;
+          status = StepStatus::Row;
+          break;
+        }
+        Opcode::Halt => {
+          // TODO: Implement sqlite3VdbeHalt()
+          status = StepStatus::Done;
+          break;
+        }
+        Opcode::Goto => {
+          step_pc = p_op.p2 as usize;
+        }
+      }
+    }
+
+    // vdbe_return:
+    status
+  }
+
+  /// Same as sqlite3Step
+  /// Execute the statement pStmt, either until a row of data is ready, the
+  /// statement is completely executed or an error occurs.
+  fn sqlite3_step(&mut self) -> StepStatus {
+    self.sqlite3_vdbe_exec()
   }
 }
 

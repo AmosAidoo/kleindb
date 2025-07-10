@@ -31,14 +31,14 @@ fn sqlite3_prepare(db: &SQLite3, z_sql: &str) -> SQLite3Stmt {
   p_parse.vdbe
 }
 
-fn sqlite3_lock_and_prepare(ctx: &KleinDBContext, z_sql: &str) {
+fn sqlite3_lock_and_prepare(ctx: &KleinDBContext, z_sql: &str) -> SQLite3Stmt {
   let db = Arc::clone(&ctx.db);
   let db = db.lock().unwrap();
 
   // Do this until it succeeds or encounters a permanent error
-  sqlite3_prepare(&db, z_sql);
+  sqlite3_prepare(&db, z_sql)
 }
 
-pub fn sqlite3_prepare_v2(ctx: &KleinDBContext, z_sql: &str) {
-  sqlite3_lock_and_prepare(ctx, z_sql);
+pub fn sqlite3_prepare_v2(ctx: &KleinDBContext, z_sql: &str) -> SQLite3Stmt {
+  sqlite3_lock_and_prepare(ctx, z_sql)
 }
