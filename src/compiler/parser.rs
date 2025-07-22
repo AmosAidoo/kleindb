@@ -47,6 +47,26 @@ pub struct SQLCmdList<'a> {
 pub enum Cmd<'a> {
   Semi,
   Select(Select<'a>),
+  CreateTable(Table<'a>),
+}
+
+// #[derive(Debug, PartialEq)]
+// enum CreateTableArgs<'a> {
+//   Parenthesized {
+//   },
+//   AsSelect(Select<'a>)
+// }
+
+#[derive(Debug, PartialEq)]
+pub struct Table<'a> {
+  // pub if_not_exists: bool,
+  // pub args: CreateTableArgs<'a>,
+  // // name_1 and name_2 should be ID, INDEXED, JOIN_KW or STRING
+  // pub name_1: Token<'a>,
+  // pub name_2: Token<'a>,
+  // pub is_view: bool,
+  // pub is_virtual: bool,
+  name: &'a str,
 }
 
 fn parse_expr<'a>()
@@ -100,6 +120,18 @@ fn whitespace<'a>() -> impl Parser<'a, &'a [Token<'a>], (), extra::Err<Rich<'a, 
     .ignored()
 }
 
+fn parse_name<'a>()
+-> impl Parser<'a, &'a [Token<'a>], Token<'a>, extra::Err<Rich<'a, Token<'a>>>> + Clone {
+  any()
+    .filter(|t: &Token| {
+      t.token_type == TokenType::String
+        || t.token_type == TokenType::INDEXED
+        || t.token_type == TokenType::JOIN
+        || t.token_type == TokenType::Id
+    })
+    .map(|t| t)
+}
+
 fn parse_oneselect<'a>()
 -> impl Parser<'a, &'a [Token<'a>], Select<'a>, extra::Err<Rich<'a, Token<'a>>>> + Clone {
   let selcollist = parse_selcollist();
@@ -115,6 +147,49 @@ fn parse_oneselect<'a>()
 fn parse_select<'a>()
 -> impl Parser<'a, &'a [Token<'a>], Select<'a>, extra::Err<Rich<'a, Token<'a>>>> + Clone {
   parse_oneselect()
+}
+
+fn parse_create_table<'a>()
+-> impl Parser<'a, &'a [Token<'a>], Table<'a>, extra::Err<Rich<'a, Token<'a>>>> + Clone {
+  let create_kw = any().filter(|t: &Token| t.token_type == TokenType::CREATE);
+  // TODO: add omit_tempdb feature
+  let temp = choice((
+    empty::<&'a [Token<'a>], extra::Err<Rich<'a, Token<'a>>>>().map(|_| false),
+    any::<&'a [Token<'a>], extra::Err<Rich<'a, Token<'a>>>>()
+      .filter(|t: &Token| t.token_type == TokenType::TEMP)
+      .map(|_| true),
+  ));
+  let ifnotexists = choice((
+    empty::<&'a [Token<'a>], extra::Err<Rich<'a, Token<'a>>>>().map(|_| false),
+    any::<&'a [Token<'a>], extra::Err<Rich<'a, Token<'a>>>>()
+      .filter(|t: &Token| t.token_type == TokenType::IF)
+      .then(any().filter(|t: &Token| t.token_type == TokenType::NOT))
+      .then(any().filter(|t: &Token| t.token_type == TokenType::EXISTS))
+      .map(|_| true),
+  ));
+  let nm = parse_name();
+  let dbnm = choice((
+    empty::<&'a [Token<'a>], extra::Err<Rich<'a, Token<'a>>>>().map(|_| Token { text: "", token_type: TokenType::Dummy}),
+    any().filter(|t: &Token| t.token_type == TokenType::Dot).then(nm.clone()).map(|(_, nm_tok)| nm_tok)
+  ));
+  
+  let create_table = create_kw
+    .ignore_then(temp)
+    .then_ignore(any().filter(|t: &Token| t.token_type == TokenType::TABLE))
+    .then(ifnotexists)
+    .then(nm)
+    .then(dbnm)
+    .map(|(((is_temp, ifnotexists_is_set), p_name1), p_name2): (((bool, bool), Token), Token)| {
+      let mut t= Table { name: "" };
+      
+      t
+    });
+  
+  let create_table_args = any();
+
+  create_table
+    .then(create_table_args)
+    .map(|(ct, args)| Table { name: "" })
 }
 
 pub fn parser<'a>()

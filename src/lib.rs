@@ -38,6 +38,9 @@ impl KleinDBContext {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum TokenType {
+  // Dummy Token
+  Dummy,
+
   LeftParen,
   RightParen,
   Space,
