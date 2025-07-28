@@ -144,6 +144,7 @@ pub fn generate_bytecode<'a>(p_parse: &mut Parse, ast: SQLCmdList<'a>) {
         };
         sqlite3_select(p_parse, select, &mut dest);
       }
+      Cmd::CreateTable(_) => {}
       // This case never happens as it is filtered out
       Cmd::Semi => {}
     }
