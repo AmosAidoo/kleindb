@@ -1,7 +1,9 @@
 //! Trying to port grammar from parse.y
+use std::sync::{Arc, Mutex};
+
 use chumsky::prelude::*;
 
-use crate::{Opcode, Parse, Token, TokenType};
+use crate::{Opcode, Parse, Schema, Token, TokenType, sqlite3_name_from_token};
 
 #[derive(Debug, PartialEq)]
 pub struct Select<'a> {
@@ -50,23 +52,13 @@ pub enum Cmd<'a> {
   CreateTable(Table<'a>),
 }
 
-// #[derive(Debug, PartialEq)]
-// enum CreateTableArgs<'a> {
-//   Parenthesized {
-//   },
-//   AsSelect(Select<'a>)
-// }
-
 #[derive(Debug, PartialEq)]
 pub struct Table<'a> {
-  // pub if_not_exists: bool,
-  // pub args: CreateTableArgs<'a>,
-  // // name_1 and name_2 should be ID, INDEXED, JOIN_KW or STRING
-  // pub name_1: Token<'a>,
-  // pub name_2: Token<'a>,
-  // pub is_view: bool,
-  // pub is_virtual: bool,
-  name: &'a str,
+  name: String,
+  p_key: Option<i16>,
+  schema: Option<Arc<Schema>>,
+  n_tab_ref: usize,
+  column_list: Option<ColumnList<'a>>
 }
 
 fn parse_expr<'a>()
@@ -132,6 +124,21 @@ fn parse_name<'a>()
     .map(|t| t)
 }
 
+fn parse_dbnm<'a>()
+-> impl Parser<'a, &'a [Token<'a>], Token<'a>, extra::Err<Rich<'a, Token<'a>>>> + Clone {
+  let nm = parse_name();
+  choice((
+    any()
+      .filter(|t: &Token| t.token_type == TokenType::Dot)
+      .ignore_then(nm.clone())
+      .map(|nm_tok| nm_tok),
+    empty::<&'a [Token<'a>], extra::Err<Rich<'a, Token<'a>>>>().map(|_| Token {
+      text: "",
+      token_type: TokenType::Dummy,
+    }),
+  ))
+}
+
 fn parse_oneselect<'a>()
 -> impl Parser<'a, &'a [Token<'a>], Select<'a>, extra::Err<Rich<'a, Token<'a>>>> + Clone {
   let selcollist = parse_selcollist();
@@ -149,51 +156,226 @@ fn parse_select<'a>()
   parse_oneselect()
 }
 
-fn parse_create_table<'a>()
--> impl Parser<'a, &'a [Token<'a>], Table<'a>, extra::Err<Rich<'a, Token<'a>>>> + Clone {
-  let create_kw = any().filter(|t: &Token| t.token_type == TokenType::CREATE);
-  // TODO: add omit_tempdb feature
+fn parse_create_table_start<'a>(
+  p_parse: Arc<Mutex<Parse<'a>>>,
+) -> impl Parser<'a, &'a [Token<'a>], Table, extra::Err<Rich<'a, Token<'a>>>> + Clone {
+  let a_parse = Arc::clone(&p_parse);
+
+  // TODO: add omit_tempdb feature flag
   let temp = choice((
-    empty::<&'a [Token<'a>], extra::Err<Rich<'a, Token<'a>>>>().map(|_| false),
     any::<&'a [Token<'a>], extra::Err<Rich<'a, Token<'a>>>>()
       .filter(|t: &Token| t.token_type == TokenType::TEMP)
+      .padded_by(whitespace().repeated())
       .map(|_| true),
-  ));
-  let ifnotexists = choice((
     empty::<&'a [Token<'a>], extra::Err<Rich<'a, Token<'a>>>>().map(|_| false),
+  ));
+
+  let ifnotexists = choice((
     any::<&'a [Token<'a>], extra::Err<Rich<'a, Token<'a>>>>()
       .filter(|t: &Token| t.token_type == TokenType::IF)
-      .then(any().filter(|t: &Token| t.token_type == TokenType::NOT))
-      .then(any().filter(|t: &Token| t.token_type == TokenType::EXISTS))
+      .padded_by(whitespace().repeated())
+      .then(
+        any()
+          .filter(|t: &Token| t.token_type == TokenType::NOT)
+          .padded_by(whitespace().repeated()),
+      )
+      .then(
+        any()
+          .filter(|t: &Token| t.token_type == TokenType::EXISTS)
+          .padded_by(whitespace().repeated()),
+      )
       .map(|_| true),
+    empty::<&'a [Token<'a>], extra::Err<Rich<'a, Token<'a>>>>().map(|_| false),
   ));
-  let nm = parse_name();
-  let dbnm = choice((
-    empty::<&'a [Token<'a>], extra::Err<Rich<'a, Token<'a>>>>().map(|_| Token { text: "", token_type: TokenType::Dummy}),
-    any().filter(|t: &Token| t.token_type == TokenType::Dot).then(nm.clone()).map(|(_, nm_tok)| nm_tok)
-  ));
-  
-  let create_table = create_kw
-    .ignore_then(temp)
-    .then_ignore(any().filter(|t: &Token| t.token_type == TokenType::TABLE))
-    .then(ifnotexists)
-    .then(nm)
-    .then(dbnm)
-    .map(|(((is_temp, ifnotexists_is_set), p_name1), p_name2): (((bool, bool), Token), Token)| {
-      let mut t= Table { name: "" };
-      
-      t
-    });
-  
-  let create_table_args = any();
 
-  create_table
-    .then(create_table_args)
-    .map(|(ct, args)| Table { name: "" })
+  let create_kw = any()
+    .filter(|t: &Token| t.token_type == TokenType::CREATE)
+    .padded_by(whitespace().repeated());
+
+  let nm = parse_name();
+
+  let dbnm = parse_dbnm();
+
+  create_kw
+    .ignore_then(temp)
+    .then_ignore(
+      any()
+        .filter(|t: &Token| t.token_type == TokenType::TABLE)
+        .padded_by(whitespace().repeated()),
+    )
+    .then(ifnotexists)
+    .then(nm.clone().then(dbnm).padded_by(whitespace().repeated()))
+    .map(
+      // This closure attempts to implement sqlite3StartTable
+      move |((_is_temp, _ifnotexists_is_set), (p_name1, p_name2)): (
+        (bool, bool),
+        (Token, Token),
+      )| {
+        let mut parse = a_parse.lock().unwrap();
+        let db = parse.db;
+
+        let (i_db, z_name, p_name) = if db.init.busy && db.init.new_t_num == 1 {
+          // Special case:  Parsing the sqlite_schema or sqlite_temp_schema schema
+          (
+            db.init.i_db as usize,
+            if db.init.i_db == 1 {
+              "sqlite_temp_master"
+            } else {
+              "sqlite_master"
+            },
+            Some(p_name1),
+          )
+        } else {
+          let tp_res = parse.sqlite3_two_part_name(&p_name1, &p_name2).unwrap();
+          (tp_res.1, sqlite3_name_from_token(db, tp_res.0), None)
+        };
+
+        parse.s_name_token = p_name;
+
+        // TODO: Test for namespace collision
+
+        let table = Table {
+          name: z_name.to_string(),
+          p_key: None,
+          // schema: Arc::clone(&db.a_db[i_db].schema.as_ref().unwrap()),
+          schema: None,
+          n_tab_ref: 1,
+          column_list: None
+        };
+
+        // TODO: Begin generating the code that will insert the table record into
+        // the schema table.
+        // Not sure if this should be moved into the codegen module for now
+
+        table
+      },
+    )
 }
 
-pub fn parser<'a>()
--> impl Parser<'a, &'a [Token<'a>], SQLCmdList<'a>, extra::Err<Rich<'a, Token<'a>>>> {
+#[derive(Debug, PartialEq)]
+enum TypeName<'a> {
+  Single(Token<'a>),
+  Multiple(Box<TypeName<'a>>, Option<Box<TypeName<'a>>>),
+}
+
+#[derive(Debug, PartialEq)]
+enum TypeToken<'a> {
+  Empty,
+  TypeName(TypeName<'a>),
+  TypeNameWithSigned(TypeName<'a>, Token<'a>),
+  TypeNameWithTwoSigned(TypeName<'a>, Token<'a>, Token<'a>),
+}
+
+#[derive(Debug, PartialEq)]
+pub struct ColumnName<'a> {
+  name: Token<'a>,
+  type_token: TypeToken<'a>,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum ColumnList<'a> {
+  Single(ColumnName<'a>),
+  Multiple(Box<ColumnList<'a>>, Option<Box<ColumnList<'a>>>),
+}
+fn parse_create_table_end<'a>()
+-> impl Parser<'a, &'a [Token<'a>], ColumnList<'a>, extra::Err<Rich<'a, Token<'a>>>> + Clone {
+  let lp = any().filter(|t: &Token| t.token_type == TokenType::LeftParen);
+  let rp = any().filter(|t: &Token| t.token_type == TokenType::RightParen);
+
+  let nm = parse_name();
+
+  // ID or String
+  let ids = any().filter(|t: &Token| matches!(t.token_type, TokenType::Id | TokenType::String));
+
+  let typename_tail = ids
+    .clone()
+    .map(|t: Token| TypeName::Multiple(Box::new(TypeName::Single(t)), None));
+
+  // Returns a list of tokens representing the type.
+  // For example, a type can be UNSIGNED BIG INT
+  let typename = ids
+    .clone()
+    .map(|t: Token| {
+      println!("inside typename");
+      TypeName::Single(t)
+    })
+    .foldl(typename_tail.repeated(), |tn, tail| {
+      TypeName::Multiple(Box::new(tn), Some(Box::new(tail)))
+    });
+
+  let number =
+    any().filter(|t: &Token| matches!(t.token_type, TokenType::Integer | TokenType::Float));
+
+  let plus_num = any()
+    .filter(|t: &Token| t.token_type == TokenType::Plus)
+    .ignore_then(number.clone());
+  let minus_num = any()
+    .filter(|t: &Token| t.token_type == TokenType::Minus)
+    .ignore_then(number);
+
+  let signed = choice((plus_num, minus_num));
+
+  let typetoken = choice((
+    typename.clone().map(|t| TypeToken::TypeName(t)),
+    typename
+      .then_ignore(lp.clone())
+      .then(signed)
+      .then_ignore(rp.clone())
+      .map(|(tn, signed)| TypeToken::TypeNameWithSigned(tn, signed)),
+    empty().map(|_| TypeToken::Empty),
+  ));
+
+  let columnname = nm
+    .padded_by(whitespace().repeated())
+    .then(typetoken)
+    .map(|(name, tt)| ColumnName {
+      name,
+      type_token: tt,
+    });
+
+  // TODO: carglist
+  let comma = any().filter(|t: &Token| t.token_type == TokenType::Comma);
+  let columnlist_tail = comma.clone().ignore_then(
+    columnname
+      .clone()
+      .map(|t: ColumnName| ColumnList::Multiple(Box::new(ColumnList::Single(t)), None)),
+  );
+
+  let columnlist = columnname
+    .clone()
+    .map(|cn| ColumnList::Single(cn))
+    .foldl(columnlist_tail.repeated(), |lhs, tail| {
+      ColumnList::Multiple(Box::new(lhs), Some(Box::new(tail)))
+    });
+
+  choice((
+    lp.ignore_then(columnlist)
+      // .then(conslist_opt)
+      .then_ignore(rp)
+      .map(|cl: ColumnList| cl),
+    // TODO: AS parse_select()
+  ))
+}
+
+fn parse_create_table<'a>(
+  p_parse: Arc<Mutex<Parse<'a>>>,
+) -> impl Parser<'a, &'a [Token<'a>], Table, extra::Err<Rich<'a, Token<'a>>>> + Clone {
+  let create_table = parse_create_table_start(Arc::clone(&p_parse));
+
+  // Optional list of constraints after column definitions
+  // let conslist_opt = empty();
+
+  let create_table_args = parse_create_table_end();
+
+  create_table.then(create_table_args).map(|(mut ct, cl)| {
+    ct.column_list = Some(cl);
+    ct
+  })
+}
+
+pub fn parser<'a>(
+  p_parse: Arc<Mutex<Parse<'a>>>,
+) -> impl Parser<'a, &'a [Token<'a>], SQLCmdList<'a>, extra::Err<Rich<'a, Token<'a>>>> {
   let semi = any().filter(|t: &Token| t.is_semi());
 
   let cmd = choice((
@@ -201,6 +383,9 @@ pub fn parser<'a>()
     parse_select()
       .then_ignore(semi.clone())
       .map(|node| Cmd::Select(node)),
+    parse_create_table(Arc::clone(&p_parse))
+      .then_ignore(semi.clone())
+      .map(|node| Cmd::CreateTable(node)),
   ))
   .padded_by(whitespace().repeated())
   .repeated()
@@ -234,14 +419,25 @@ pub fn sqlite3_finish_coding(p_parse: &mut Parse) {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::compiler::tokenizer;
+  use crate::{SQLite3, SQLite3Stmt, compiler::tokenizer};
 
-  const SQL: &str = "SELECT 1, 2, 3;";
+  fn create_ctx<'a>(db: &'a SQLite3) -> Arc<Mutex<Parse<'a>>> {
+    // let db = SQLite3::new();
+    Arc::new(Mutex::new(Parse {
+      db: &db,
+      vdbe: SQLite3Stmt::new(),
+      n_mem: 0,
+      s_name_token: None,
+    }))
+  }
 
   #[test]
   fn test_parse_simple_select_into_ast() {
+    const SQL: &str = "SELECT 1, 2, 3;";
+    let db = SQLite3::new();
+    let parse_ctx = create_ctx(&db);
     let tokens = tokenizer::tokenize(SQL);
-    let ast = parser().parse(&tokens).unwrap();
+    let ast = parser(parse_ctx).parse(&tokens).unwrap();
     let list = vec![Cmd::Select(Select {
       expr_list: ExprList {
         items: vec![
@@ -280,4 +476,56 @@ mod tests {
     })];
     assert_eq!(ast, SQLCmdList { list });
   }
+
+  #[test]
+  fn test_parse_create_table_start() {
+    const SQL: &str = "CREATE TABLE t1";
+    let db = SQLite3::new();
+    let parse_ctx = create_ctx(&db);
+    let tokens = tokenizer::tokenize(SQL);
+    let ast = parse_create_table_start(parse_ctx).parse(&tokens).unwrap();
+
+    assert_eq!(
+      ast,
+      Table {
+        name: "t1".to_string(),
+        p_key: None,
+        schema: None,
+        n_tab_ref: 1,
+        column_list: None
+      }
+    );
+  }
+
+  #[test]
+  fn test_parse_create_table_end() {
+    const SQL: &str = "(a)";
+    let db = SQLite3::new();
+    let parse_ctx = create_ctx(&db);
+    let tokens = tokenizer::tokenize(SQL);
+    let ast = parse_create_table_end().parse(&tokens).unwrap();
+
+    assert_eq!(
+      ast,
+      ColumnList::Single(ColumnName {
+        name: Token {
+          text: "a",
+          token_type: TokenType::Id
+        },
+        type_token: TypeToken::Empty
+      })
+    );
+  }
+
+  // #[test]
+  // fn test_parse_create_table_into_ast() {
+  //   const SQL: &str = "CREATE TABLE t1(a);";
+  //   let db = SQLite3::new();
+  //   let parse_ctx = create_ctx(&db);
+  //   let tokens = tokenizer::tokenize(SQL);
+  //   let ast = parser(parse_ctx).parse(&tokens);
+  //   println!("{ast:?}");
+  //   // assert_eq!(ast, SQLCmdList { list });
+  //   assert!(true);
+  // }
 }

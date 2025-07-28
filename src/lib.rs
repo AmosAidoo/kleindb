@@ -1,6 +1,12 @@
-use std::sync::{Arc, Mutex};
+use std::{
+  collections::HashMap,
+  sync::{Arc, Mutex},
+};
+
+use crate::storage::btree::Btree;
 
 pub mod compiler;
+pub mod storage;
 
 const SQLITE_DIGIT_SEPARATOR: u8 = b'_';
 
@@ -9,6 +15,38 @@ pub enum StepStatus {
   Ok,
   Row,
   Done,
+}
+
+#[derive(Debug)]
+pub enum KleinDBError {
+  Error,
+  Internal,
+  Perm,
+  Abort,
+  Busy,
+  Locked,
+  NoMem,
+  ReadOnly,
+  Interrupt,
+  IoErr,
+  Corrupt,
+  NotFound,
+  Full,
+  CantOpen,
+  Protocol,
+  Empty,
+  Schema,
+  TooBig,
+  Constraint,
+  Mismatch,
+  Misuse,
+  NoLfs,
+  Auth,
+  Format,
+  Range,
+  NotADb,
+  Notice,
+  Warning,
 }
 
 /// This context will be passed around throughout the lifetime
@@ -28,11 +66,32 @@ impl KleinDBContext {
       Err(())
     }
   }
-}
 
-impl KleinDBContext {
   pub fn set_vdbe(&mut self, p_stmt: SQLite3Stmt) {
     self.vdbe = Some(p_stmt);
+  }
+
+  /// This routine does the work of opening a database on behalf of
+  /// sqlite3_open() and sqlite3_open16(). The database filename "filename"
+  /// is UTF-8 encoded.
+  fn open_database(&mut self, filename: &str) {
+    let db_handle = Arc::clone(&self.db);
+    // Enter mutex
+    let mut db = db_handle.lock().unwrap();
+
+    // nDb = 2
+    for _ in 0..2 {
+      db.a_db.push(Db {
+        db_schema_name: String::new(),
+        bt: Btree {},
+        safety_level: 0,
+        sync_set: false,
+        schema: None,
+      });
+    }
+  }
+  pub fn sqlite3_open_v2(&mut self, filename: &str) {
+    self.open_database(filename)
   }
 }
 
@@ -235,6 +294,7 @@ impl<'a> Token<'a> {
 /// generate call themselves recursively, the first part of the structure
 /// is constant but the second part is reset at the beginning and end of
 /// each recursion.
+#[derive(Debug)]
 pub struct Parse<'a> {
   /// The main database structure
   db: &'a SQLite3,
@@ -242,10 +302,130 @@ pub struct Parse<'a> {
   vdbe: SQLite3Stmt,
   /// Number of memory cells used so far
   n_mem: usize,
+
+  /// unqualified schema object name
+  s_name_token: Option<Token<'a>>,
+}
+
+impl<'a> Parse<'a> {
+  /// The table or view or trigger name is passed to this routine via tokens
+  /// pName1 and pName2. If the table name was fully qualified, for example:
+  ///
+  /// CREATE TABLE xxx.yyy (...);
+  ///
+  /// Then p_name1 is set to "xxx" and p_name2 "yyy". On the other hand if
+  /// the table name is not fully qualified, i.e.:
+  ///
+  /// CREATE TABLE yyy(...);
+  ///
+  /// Then p_name1 is set to "yyy" and p_name2 is "".
+  ///
+  /// This routine returns a tuple (&Token, usize) where Token is
+  /// the un-qualified pointer to either p_name1 or p_name2. usize
+  /// is the index of database xxx
+  pub fn sqlite3_two_part_name(
+    &self,
+    p_name1: &'a Token,
+    p_name2: &'a Token,
+  ) -> Result<(&'a Token<'a>, usize), ()> {
+    let db = self.db;
+    if p_name2.text.len() > 0 {
+      // Same as token_type == Dummy
+      if db.init.busy {
+        // corrupt database
+        return Err(());
+      }
+
+      let i_db = sqlite3_find_db(db, p_name1);
+
+      if let Some(i) = i_db {
+        Ok((p_name2, i))
+      } else {
+        Err(())
+      }
+    } else {
+      // TODO: Look at this assert more closely
+      //assert( db->init.iDb==0 || db->init.busy || IN_SPECIAL_PARSE
+      //  || (db->mDbFlags & DBFLAG_Vacuum)!=0);
+      Ok((p_name1, db.init.i_db.into()))
+    }
+  }
+}
+
+/// An instance of the following structure stores a database schema.
+#[derive(Debug, PartialEq)]
+pub struct Schema {
+  /// Database schema version number for this file
+  pub schema_cookie: i32,
+  /// Generation counter.  Incremented with each change
+  pub i_generation: i32,
+  // All tables indexed by name
+  // tbl_hash: HashMap<>
+}
+
+/// Each database file to be accessed by the system is an instance
+/// of the following structure.  There are normally two of these structures
+/// in the sqlite.aDb[] array.  aDb[0] is the main database file and
+/// aDb[1] is the database file used to hold temporary tables.  Additional
+/// databases may be attached.
+#[derive(Debug)]
+pub struct Db {
+  pub db_schema_name: String,
+  /// The B*Tree structure for this database file
+  pub bt: Btree,
+  /// How aggressive at syncing data to disk
+  pub safety_level: u8,
+  /// True if "PRAGMA synchronous=N" has been run
+  pub sync_set: bool,
+  /// Pointer to database schema (possibly shared)
+  pub schema: Option<Arc<Schema>>,
+}
+
+type Pgno = i32;
+
+/// Information used during initialization
+#[derive(Debug)]
+pub struct SQLite3InitInfo {
+  /// Rootpage of table being initialized
+  pub new_t_num: Pgno,
+  /// Which db file is being initialized
+  pub i_db: u8,
+  pub busy: bool,
 }
 
 /// Each database connection is an instance of the following structure.
-pub struct SQLite3 {}
+#[derive(Debug)]
+pub struct SQLite3 {
+  /// All backends
+  pub a_db: Vec<Db>,
+  pub init: SQLite3InitInfo,
+}
+
+impl SQLite3 {
+  pub fn new() -> Self {
+    Self {
+      a_db: vec![],
+      init: SQLite3InitInfo {
+        new_t_num: 0,
+        i_db: 0,
+        busy: false,
+      },
+    }
+  }
+
+  pub fn sqlite3_find_db_name(&self, z_name: &str) -> Option<usize> {
+    let i = self.a_db.iter().position(|db| db.db_schema_name == z_name);
+    if let Some(idx) = i {
+      Some(idx)
+    } else {
+      if self.a_db.iter().position(|db| db.db_schema_name == "main") == Some(0) {
+        Some(0)
+      } else {
+        None
+      }
+    }
+  }
+}
 
 #[derive(Debug)]
 pub enum Opcode {
@@ -267,7 +447,7 @@ pub struct VdbeOp {
   pub p3: i32,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum MemValue {
   Undefined,
   Integer(i32),
@@ -275,12 +455,13 @@ pub enum MemValue {
 }
 
 /// These are Mems
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SQLite3Value {
   pub value: MemValue,
 }
 
 /// AKA VDBE
+#[derive(Debug)]
 pub struct SQLite3Stmt {
   /// The program counter
   pub pc: usize,
@@ -470,5 +651,44 @@ pub fn is_id_char(ch: u8) -> bool {
     b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'$' | b'_' => true,
     128..=255 => true,
     _ => false,
+  }
+}
+
+pub fn sqlite3_find_db(db: &SQLite3, p_name: &Token) -> Option<usize> {
+  let z_name = sqlite3_name_from_token(db, p_name);
+  db.sqlite3_find_db_name(z_name)
+}
+
+pub fn sqlite3_name_from_token<'a>(db: &SQLite3, p_name: &'a Token) -> &'a str {
+  sqlite3_dequote(p_name.text)
+}
+
+pub fn sqlite3_dequote<'a>(z_name: &'a str) -> &'a str {
+  let mut chrs = z_name.chars();
+  let mut q: Option<char> = chrs.nth(0);
+
+  if let Some(quote) = q.as_mut() {
+    if matches!(quote, '\'' | '[' | '"' | '`') {
+      *quote = ']';
+
+      let mut i: usize = 1;
+
+      while i < z_name.len() {
+        if chrs.nth(i) == Some(*quote) {
+          if i + 1 < z_name.len() && chrs.nth(i + 1) == Some(*quote) {
+            i += 1;
+          } else {
+            break;
+          }
+        }
+        i += 1;
+      }
+
+      &z_name[1..i]
+    } else {
+      z_name
+    }
+  } else {
+    z_name
   }
 }

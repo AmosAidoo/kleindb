@@ -171,9 +171,13 @@ impl ShellState<'_> {
     }
   }
 
-  fn open_db(&self) {
-    // In the sqlite code, there is a check to see if
-    // db is stdin, I'm not doing that check at this point
+  /// Make sure the database is open.  If it is not, then open it.  If
+  /// the database fails to open, panic
+  fn open_db(&mut self) {
+    let db_filename = &self.a_aux_db[0].db_filename;
+
+    // TODO: Handle all the open modes
+    self.ctx.sqlite3_open_v2(db_filename);
   }
 
   fn one_input_line(&mut self, is_continuation: bool) -> Option<String> {
@@ -197,6 +201,7 @@ impl ShellState<'_> {
 
   /// Run a single line of SQL.  Return the number of errors.
   fn run_one_sql_line(&mut self, z_sql: &str, startline: usize) {
+    self.open_db();
     let _ = self.shell_exec(z_sql);
   }
 
@@ -238,7 +243,7 @@ fn main() {
   // let warn_in_memory_db = false;
   // let read_stdin = true;
   let mut ctx = KleinDBContext {
-    db: Arc::new(Mutex::new(SQLite3 {})),
+    db: Arc::new(Mutex::new(SQLite3::new())),
     vdbe: None,
   };
   // let p_stmt = SQLite3Stmt {};
