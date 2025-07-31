@@ -7,4 +7,5 @@ edition = "2024"
 omit_memorydb = []
 
 [dependencies]
+bitflags = "2.9.1"
 chumsky = "0.10.1"
