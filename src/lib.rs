@@ -71,26 +71,37 @@ impl KleinDBContext {
     self.vdbe = Some(p_stmt);
   }
 
+  // TODO
+  fn sqlite3_parse_url() {}
+
   /// This routine does the work of opening a database on behalf of
   /// sqlite3_open() and sqlite3_open16(). The database filename "filename"
   /// is UTF-8 encoded.
-  fn open_database(&mut self, filename: &str) {
+  fn open_database(&mut self, filename: &str) -> Result<(), KleinDBError> {
     let db_handle = Arc::clone(&self.db);
     // Enter mutex
     let mut db = db_handle.lock().unwrap();
 
     // nDb = 2
+    // db->aDb = db->aDbStatic;
     for _ in 0..2 {
       db.a_db.push(Db {
         db_schema_name: String::new(),
-        bt: Btree {},
+        bt: None,
         safety_level: 0,
         sync_set: false,
         schema: None,
       });
     }
+
+    // TODO: Parse the filename/URI argument
+    
+    // Open the backend database driver
+    db.a_db[0].bt = Some(Btree::open(filename, &db).unwrap());
+
+    Ok(())
   }
-  pub fn sqlite3_open_v2(&mut self, filename: &str) {
+  pub fn sqlite3_open_v2(&mut self, filename: &str) -> Result<(), KleinDBError> {
     self.open_database(filename)
   }
 }
@@ -371,8 +382,8 @@ pub struct Schema {
 #[derive(Debug)]
 pub struct Db {
   pub db_schema_name: String,
-  /// The B*Tree structure for this database file
-  pub bt: Btree,
+  /// The BTree structure for this database file
+  pub bt: Option<Btree>,
   /// How aggressive at syncing data to disk
   pub safety_level: u8,
   /// True if "PRAGMA synchronous=N" has been run
