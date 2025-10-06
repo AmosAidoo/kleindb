@@ -2,12 +2,12 @@
 //! interface, and routines that contribute to loading the database schema
 //! from disk.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use chumsky::Parser;
 
 use crate::{
-  KleinDBContext, Parse, SQLite3, SQLite3Stmt,
+  Cr, KleinDBContext, Parse, SQLite3, SQLite3Stmt,
   compiler::{codegen::generate_bytecode, parser::parser, tokenizer},
 };
 
@@ -15,20 +15,32 @@ use crate::{
 fn sqlite3_prepare(db: &SQLite3, z_sql: &str) -> SQLite3Stmt {
   let tokens = tokenizer::tokenize(z_sql);
 
-  // Similar to sqlite3RunParser()
-  let ast = parser().parse(&tokens).unwrap();
-  println!("{:?}", ast);
-
-  let mut p_parse = Parse {
+  let parse_ctx = Arc::new(Mutex::new(Parse {
     db,
     vdbe: SQLite3Stmt::new(),
     n_mem: 0,
-  };
-  generate_bytecode(&mut p_parse, ast);
+    s_name_token: None,
+    cr: Cr {
+      addr_cr_tab: -1,
+      reg_row_id: -1,
+      reg_root: -1,
+    },
+  }));
+
+  // Similar to sqlite3RunParser()
+  let ast = parser(Arc::clone(&parse_ctx)).parse(&tokens).unwrap();
+  println!("{:?}", ast);
+
+  {
+    let a_parse = Arc::clone(&parse_ctx);
+    let mut p_parse = a_parse.lock().unwrap();
+    generate_bytecode(&mut p_parse, ast);
+  }
 
   // TODO: Final checks, error handling comes here
 
-  p_parse.vdbe
+  let lock = Arc::into_inner(parse_ctx).unwrap();
+  lock.into_inner().unwrap().vdbe
 }
 
 fn sqlite3_lock_and_prepare(ctx: &KleinDBContext, z_sql: &str) -> SQLite3Stmt {

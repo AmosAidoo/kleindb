@@ -1,11 +1,12 @@
 use std::{
+  env,
   io::{BufRead, BufReader, Write},
+  path::Path,
   sync::{Arc, Mutex},
 };
 
 use kleindb::{
-  KleinDBContext, SQLite3, StepStatus, compiler::prepare::sqlite3_prepare_v2,
-  is_id_char,
+  KleinDBContext, SQLite3, StepStatus, compiler::prepare::sqlite3_prepare_v2, is_id_char,
 };
 
 const MAIN_PROMPT: &str = "sqlite> ";
@@ -28,6 +29,11 @@ enum ShellOpenModes {
   HexDB,
 }
 
+/// Storage space for auxiliary database connection
+struct AuxDb {
+  db_filename: String,
+}
+
 struct ShellState<'a> {
   /// Kleindb Context
   ctx: &'a mut KleinDBContext,
@@ -45,6 +51,8 @@ struct ShellState<'a> {
 
   /// Line number of last line read from in
   lineno: usize,
+
+  a_aux_db: [AuxDb; 5],
 }
 
 // Token types used by the sqlite3_complete() routine.
@@ -163,9 +171,15 @@ impl ShellState<'_> {
     }
   }
 
-  fn open_db(&self) {
-    // In the sqlite code, there is a check to see if
-    // db is stdin, I'm not doing that check at this point
+  /// Make sure the database is open.  If it is not, then open it.  If
+  /// the database fails to open, panic
+  fn open_db(&mut self) {
+    let db_filename = &self.a_aux_db[0].db_filename;
+
+    // TODO: Handle all the open modes
+    self.ctx.sqlite3_open_v2(db_filename);
+
+    // TODO: Initialize/load functions
   }
 
   fn one_input_line(&mut self, is_continuation: bool) -> Option<String> {
@@ -189,6 +203,7 @@ impl ShellState<'_> {
 
   /// Run a single line of SQL.  Return the number of errors.
   fn run_one_sql_line(&mut self, z_sql: &str, startline: usize) {
+    self.open_db();
     let _ = self.shell_exec(z_sql);
   }
 
@@ -229,13 +244,29 @@ impl ShellState<'_> {
 fn main() {
   // let warn_in_memory_db = false;
   // let read_stdin = true;
-
   let mut ctx = KleinDBContext {
-    db: Arc::new(Mutex::new(SQLite3 {})),
+    db: Arc::new(Mutex::new(SQLite3::new())),
     vdbe: None,
   };
   // let p_stmt = SQLite3Stmt {};
 
+  let a_aux_db: [AuxDb; 5] = [
+    AuxDb {
+      db_filename: String::new(),
+    },
+    AuxDb {
+      db_filename: String::new(),
+    },
+    AuxDb {
+      db_filename: String::new(),
+    },
+    AuxDb {
+      db_filename: String::new(),
+    },
+    AuxDb {
+      db_filename: String::new(),
+    },
+  ];
   let mut shell_state = ShellState {
     ctx: &mut ctx,
     // p_stmt: &p_stmt,
@@ -243,7 +274,40 @@ fn main() {
     out: Box::new(std::io::stdout()),
     open_mode: ShellOpenModes::Unspec,
     lineno: 0,
+    a_aux_db,
   };
+
+  let mut args = env::args();
+  args.next();
+
+  for arg in args {
+    println!("{arg}");
+    if arg.chars().nth(0) != Some('-') {
+      // This is the name of the database
+      if shell_state.a_aux_db[0].db_filename.is_empty() {
+        shell_state.a_aux_db[0].db_filename = arg;
+      }
+    }
+  }
+
+  if shell_state.a_aux_db[0].db_filename.is_empty() {
+    if !cfg!(feature = "omit_memorydb") {
+      shell_state.a_aux_db[0].db_filename = ":memory:".to_string();
+    } else {
+      panic!("Error: no database filename spefified");
+    }
+  }
+
+  // Go ahead and open the database file if it already exists.  If the
+  // file does not exist, delay opening it.  This prevents empty database
+  // files from being created if a user mistypes the database name argument
+  // to the sqlite command-line tool.
+  let path = Path::new(&shell_state.a_aux_db[0].db_filename);
+  let exists = path.try_exists().expect("Can't check existence of file");
+
+  if exists {
+    shell_state.open_db();
+  }
 
   shell_state.process_input();
 }
