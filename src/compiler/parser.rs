@@ -106,11 +106,13 @@ pub struct Column {
 
 #[derive(Debug, PartialEq)]
 pub struct Table {
-  name: String,
-  p_key: Option<i16>,
-  schema: Option<Arc<Schema>>,
-  n_tab_ref: usize,
-  a_col: Vec<Column>,
+  pub name: String,
+  pub p_key: Option<i16>,
+  pub schema: Option<Arc<Schema>>,
+  pub n_tab_ref: usize,
+  pub a_col: Vec<Column>,
+  /// Database number to create the table in
+  pub i_db: usize,
 }
 
 fn parse_expr<'a>()
@@ -293,12 +295,12 @@ fn parse_create_table_start<'a>(
           schema: None,
           n_tab_ref: 1,
           a_col: vec![],
+          i_db,
         };
 
         // TODO: Begin generating the code that will insert the table record into
         // the schema table.
         // Not sure if this should be moved into the codegen module for now
-
         table
       },
     )
@@ -550,7 +552,7 @@ pub fn sqlite3_finish_coding(p_parse: &mut Parse) {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::{SQLite3, SQLite3Stmt, compiler::tokenizer};
+  use crate::{Cr, SQLite3, SQLite3Stmt, compiler::tokenizer};
 
   fn create_ctx<'a>(db: &'a SQLite3) -> Arc<Mutex<Parse<'a>>> {
     // let db = SQLite3::new();
@@ -559,6 +561,11 @@ mod tests {
       vdbe: SQLite3Stmt::new(),
       n_mem: 0,
       s_name_token: None,
+      cr: Cr {
+        addr_cr_tab: -1,
+        reg_row_id: -1,
+        reg_root: -1,
+      },
     }))
   }
 
@@ -623,7 +630,8 @@ mod tests {
         p_key: None,
         schema: None,
         n_tab_ref: 1,
-        a_col: vec![]
+        a_col: vec![],
+        i_db: 0
       }
     );
   }
