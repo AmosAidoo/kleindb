@@ -25,7 +25,7 @@ impl Pager {
     let mut pager = Pager { pcache: None };
 
     // Open the pager file
-    let f = File::open(filename).unwrap();
+    // let f = File::open(filename).unwrap();
     // let readonly = false;
 
     // TODO: If the file was successfully opened for read/write access,

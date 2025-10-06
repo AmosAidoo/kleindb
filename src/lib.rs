@@ -100,7 +100,7 @@ impl KleinDBContext {
 
     // Open the backend database driver
     db.a_db[0].bt = Some(Btree::open(filename, &db).unwrap());
-    db.a_db[0].schema = Some(Self::sqlite3_schema_get(db.a_db[0].bt.as_mut()));
+    // db.a_db[0].schema = Some(Self::sqlite3_schema_get(db.a_db[0].bt.as_mut()));
     Ok(())
   }
 
