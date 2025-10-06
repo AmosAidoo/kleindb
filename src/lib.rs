@@ -3,6 +3,8 @@ use std::{
   sync::{Arc, Mutex},
 };
 
+use bitflags::bitflags;
+
 use crate::storage::btree::Btree;
 
 pub mod compiler;
@@ -95,12 +97,28 @@ impl KleinDBContext {
     }
 
     // TODO: Parse the filename/URI argument
-    
+
     // Open the backend database driver
     db.a_db[0].bt = Some(Btree::open(filename, &db).unwrap());
-
+    db.a_db[0].schema = Some(Self::sqlite3_schema_get(db.a_db[0].bt.as_mut()));
     Ok(())
   }
+
+  /// Find and return the schema associated with a BTree.  Create
+  /// a new one if necessary.
+  fn sqlite3_schema_get(mut bt: Option<&mut Btree>) -> Arc<Schema> {
+    let schema = if let Some(btr) = bt.as_mut() {
+      btr.schema()
+    } else {
+      Arc::new(Schema {
+        schema_cookie: 0,
+        i_generation: 0,
+      })
+    };
+    // TODO: Oom checn and file_format check
+    schema
+  }
+
   pub fn sqlite3_open_v2(&mut self, filename: &str) -> Result<(), KleinDBError> {
     self.open_database(filename)
   }
@@ -297,6 +315,16 @@ impl<'a> Token<'a> {
   }
 }
 
+#[derive(Debug)]
+struct Cr {
+  addr_cr_tab: i32,
+  reg_row_id: i32,
+  reg_root: i32,
+}
+
+// #[derive(Debug)]
+// struct D {}
+
 /// An SQL parser context. A copy of this structure is passed through
 /// the parser and down into all the parser action routine in order to
 /// carry around information that is global to the entire parse.
@@ -316,6 +344,9 @@ pub struct Parse<'a> {
 
   /// unqualified schema object name
   s_name_token: Option<Token<'a>>,
+
+  /// These fields available when isCreate is true
+  cr: Cr,
 }
 
 impl<'a> Parse<'a> {
@@ -445,6 +476,49 @@ pub enum Opcode {
   ResultRow,
   Halt,
   Goto,
+  ReadCookie,
+  If,
+  SetCookie,
+  NewRowid,
+  Blob,
+  Insert,
+  Close,
+  CreateBtree,
+}
+
+pub enum TextEncodings {
+  Utf8 = 1,
+  Utf16LE,
+  Utf16BE,
+  Utf16,
+  Any,
+  Utf16Aligned = 8,
+}
+
+#[derive(Debug)]
+enum P4Union {
+  Strings(String),
+  Int32(i32),
+  Int64(i64),
+  Real(f64),
+}
+
+#[derive(Debug, Clone)]
+pub enum P4Type {
+  Transient,
+  Static = -1,
+  CollSeq = -2,
+  Int32 = -3,
+  SubProgram = -4,
+  Table = -5,
+  Dynamic = -6,
+}
+
+bitflags! {
+  #[derive(Debug)]
+  pub struct OpFlags: u32 {
+    const APPEND = 0x08;
+  }
 }
 
 /// A single instruction of the virtual machine has an opcode
@@ -456,6 +530,9 @@ pub struct VdbeOp {
   pub p1: i32,
   pub p2: i32,
   pub p3: i32,
+  pub p4type: Option<P4Type>,
+  pub p4: Option<P4Union>,
+  pub p5: Option<OpFlags>,
 }
 
 #[derive(Debug, Clone)]
@@ -529,6 +606,9 @@ impl SQLite3Stmt {
       p1,
       p2,
       p3,
+      p4type: None,
+      p4: None,
+      p5: None,
     });
     i
   }
@@ -550,6 +630,53 @@ impl SQLite3Stmt {
   /// Generate code for an unconditional jump to instruction iDest
   pub fn sqlite3_vdbe_goto(&mut self, i_dest: i32) -> usize {
     self.sqlite3_add_op3(Opcode::Goto, 0, i_dest, 0)
+  }
+
+  /// Add an opcode that includes the p4 value as a pointer.
+  pub fn sqlite3_add_op4(
+    &mut self,
+    op: Opcode,
+    p1: i32,
+    p2: i32,
+    p3: i32,
+    p4: String,
+    p4type: P4Type,
+  ) {
+    let addr = self.sqlite3_add_op3(op, p1, p2, p3);
+    self.sqlite3_vdbe_change_p4(addr as i32, p4, p4type);
+  }
+
+  /// Change the value of the P4 operand for a specific instruction.
+  pub fn sqlite3_vdbe_change_p4(&mut self, addr: i32, p4: String, n: P4Type) {
+    let mut addr = addr as usize;
+    if addr < 0 {
+      addr = self.a_op.len() - 1;
+    }
+    let op = &self.a_op[addr];
+    if n.clone() as i32 >= 0 || op.p4type.is_some() {
+      self.vdbe_change_p4_full(addr, p4, n);
+    }
+    // TODO: Handle P4_INT32
+  }
+
+  /// Change the value of the P4 operand for a specific instruction.
+  pub fn vdbe_change_p4_full(&mut self, addr: usize, p4: String, n: P4Type) {
+    if (n.clone() as i32) < 0 {
+      self.sqlite3_vdbe_change_p4(addr as i32, p4, n);
+    } else {
+      // From the original source, if n is 0, the length of
+      // p4 is calculated and n is updated, otherwise n is the
+      // length of the string
+      self.a_op[addr].p4 = Some(P4Union::Strings(p4));
+      self.a_op[addr].p4type = Some(P4Type::Dynamic);
+    }
+  }
+
+  pub fn sqlite3_vdbe_change_p5(&mut self, p5: OpFlags) {
+    let n = self.a_op.len();
+    if n > 0 {
+      self.a_op[n - 1].p5 = Some(p5);
+    }
   }
 
   pub fn sqlite3_column_count(&self) -> usize {
@@ -600,7 +727,8 @@ impl SQLite3Stmt {
         }
         Opcode::Goto => {
           step_pc = p_op.p2 as usize;
-        }
+        },
+        _ => {}
       }
     }
 
