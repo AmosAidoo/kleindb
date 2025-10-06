@@ -178,6 +178,8 @@ impl ShellState<'_> {
 
     // TODO: Handle all the open modes
     self.ctx.sqlite3_open_v2(db_filename);
+
+    // TODO: Initialize/load functions
   }
 
   fn one_input_line(&mut self, is_continuation: bool) -> Option<String> {
