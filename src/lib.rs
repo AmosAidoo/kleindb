@@ -300,6 +300,8 @@ pub enum TokenType {
   UNBOUNDED,
   UNION,
   UNIQUE,
+  UPDATE,
+  WHERE,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -484,7 +486,10 @@ pub enum Opcode {
   Insert,
   Close,
   CreateBtree,
+  OpenWrite,
 }
+
+pub const SCHEMA_ROOT: i32 = 1;
 
 pub enum TextEncodings {
   Utf8 = 1,
@@ -496,7 +501,7 @@ pub enum TextEncodings {
 }
 
 #[derive(Debug)]
-enum P4Union {
+pub enum P4Union {
   Strings(String),
   Int32(i32),
   Int64(i64),
@@ -659,6 +664,21 @@ impl SQLite3Stmt {
     // TODO: Handle P4_INT32
   }
 
+  pub fn add_op4_int(&mut self, op: Opcode, p1: i32, p2: i32, p3: i32, p4: i32) -> usize {
+    let i = self.a_op.len();
+    // TODO: if( p->nOpAlloc<=i ) ...
+    self.a_op.push(VdbeOp {
+      opcode: op,
+      p1,
+      p2,
+      p3,
+      p4type: Some(P4Type::Int32),
+      p4: Some(P4Union::Int32(p4)),
+      p5: None,
+    });
+    i
+  }
+
   /// Change the value of the P4 operand for a specific instruction.
   pub fn vdbe_change_p4_full(&mut self, addr: usize, p4: String, n: P4Type) {
     if (n.clone() as i32) < 0 {
@@ -727,7 +747,7 @@ impl SQLite3Stmt {
         }
         Opcode::Goto => {
           step_pc = p_op.p2 as usize;
-        },
+        }
         _ => {}
       }
     }

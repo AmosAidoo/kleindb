@@ -1,11 +1,73 @@
 //! Trying to port grammar from parse.y
+use crate::{Opcode, Parse, Schema, Token, TokenType, sqlite3_name_from_token};
+use bitflags::bitflags;
+use chumsky::{
+  DefaultExpected,
+  error::Error,
+  label::LabelError,
+  prelude::*,
+  util::{Maybe, MaybeRef},
+};
 use std::sync::{Arc, Mutex};
 
-use bitflags::bitflags;
+type Span = SimpleSpan<usize>;
+#[derive(Debug, PartialEq)]
+pub enum KleinDBParserError<'a> {
+  ExpectedFound {
+    span: Span,
+    expected: Vec<DefaultExpected<'a, TokenType>>,
+    found: Option<TokenType>,
+  },
+  InvalidFullDatabaseName(Span),
+  InvalidWhitespace(Span),
+  InvalidToken {
+    span: Span,
+    expected: TokenType,
+    found: Option<TokenType>,
+  },
+}
 
-use chumsky::prelude::*;
+impl<'a> Error<'a, &'a [Token<'a>]> for KleinDBParserError<'a> {
+  fn merge(mut self, mut other: Self) -> Self {
+    if let (
+      Self::ExpectedFound { expected, .. },
+      Self::ExpectedFound {
+        expected: expected_other,
+        ..
+      },
+    ) = (&mut self, &mut other)
+    {
+      expected.append(expected_other);
+    }
+    self
+  }
+}
 
-use crate::{Opcode, Parse, Schema, Token, TokenType, sqlite3_name_from_token};
+impl<'a> LabelError<'a, &'a [Token<'a>], DefaultExpected<'a, Token<'a>>>
+  for KleinDBParserError<'a>
+{
+  fn expected_found<E: IntoIterator<Item = DefaultExpected<'a, Token<'a>>>>(
+    expected: E,
+    found: Option<MaybeRef<'a, Token<'a>>>,
+    span: Span,
+  ) -> Self {
+    Self::ExpectedFound {
+      span,
+      expected: expected
+        .into_iter()
+        .map(|exp| match exp {
+          DefaultExpected::Token(maybe) => {
+            DefaultExpected::<'a, TokenType>::Token(Maybe::Val(maybe.token_type.clone()))
+          }
+          DefaultExpected::Any => DefaultExpected::<'a, TokenType>::Any,
+          DefaultExpected::SomethingElse => DefaultExpected::<'a, TokenType>::SomethingElse,
+          _ => DefaultExpected::<'a, TokenType>::EndOfInput,
+        })
+        .collect(),
+      found: found.as_deref().map(|f| f.token_type.clone()),
+    }
+  }
+}
 
 #[derive(Debug, PartialEq)]
 pub struct Select<'a> {
@@ -52,6 +114,7 @@ pub enum Cmd<'a> {
   Semi,
   Select(Select<'a>),
   CreateTable(Table),
+  Update(Update<'a>),
 }
 
 bitflags! {
@@ -116,7 +179,7 @@ pub struct Table {
 }
 
 fn parse_expr<'a>()
--> impl Parser<'a, &'a [Token<'a>], Expr<'a>, extra::Err<Rich<'a, Token<'a>>>> + Clone {
+-> impl Parser<'a, &'a [Token<'a>], Expr<'a>, extra::Err<KleinDBParserError<'a>>> + Clone {
   let any_term = |tt: TokenType| {
     any()
       .filter(move |t: &Token| t.token_type == tt)
@@ -139,7 +202,7 @@ fn parse_expr<'a>()
 }
 
 fn parse_selcollist<'a>()
--> impl Parser<'a, &'a [Token<'a>], ExprList<'a>, extra::Err<Rich<'a, Token<'a>>>> + Clone {
+-> impl Parser<'a, &'a [Token<'a>], ExprList<'a>, extra::Err<KleinDBParserError<'a>>> + Clone {
   let expr = parse_expr().padded_by(whitespace().repeated());
   let comma = any()
     .filter(|t: &Token<'a>| t.token_type == TokenType::Comma)
@@ -159,15 +222,22 @@ fn parse_selcollist<'a>()
     })
 }
 
-fn whitespace<'a>() -> impl Parser<'a, &'a [Token<'a>], (), extra::Err<Rich<'a, Token<'a>>>> + Clone
-{
+fn whitespace<'a>()
+-> impl Parser<'a, &'a [Token<'a>], (), extra::Err<KleinDBParserError<'a>>> + Clone {
   any()
     .filter(|token: &Token| token.token_type == TokenType::Space)
     .ignored()
+    .map_err(|e| {
+      if let KleinDBParserError::ExpectedFound { span, .. } = e {
+        KleinDBParserError::InvalidWhitespace(span)
+      } else {
+        e
+      }
+    })
 }
 
 fn parse_name<'a>()
--> impl Parser<'a, &'a [Token<'a>], Token<'a>, extra::Err<Rich<'a, Token<'a>>>> + Clone {
+-> impl Parser<'a, &'a [Token<'a>], Token<'a>, extra::Err<KleinDBParserError<'a>>> + Clone {
   any()
     .filter(|t: &Token| {
       t.token_type == TokenType::String
@@ -179,14 +249,14 @@ fn parse_name<'a>()
 }
 
 fn parse_dbnm<'a>()
--> impl Parser<'a, &'a [Token<'a>], Token<'a>, extra::Err<Rich<'a, Token<'a>>>> + Clone {
+-> impl Parser<'a, &'a [Token<'a>], Token<'a>, extra::Err<KleinDBParserError<'a>>> + Clone {
   let nm = parse_name();
   choice((
     any()
       .filter(|t: &Token| t.token_type == TokenType::Dot)
       .ignore_then(nm.clone())
       .map(|nm_tok| nm_tok),
-    empty::<&'a [Token<'a>], extra::Err<Rich<'a, Token<'a>>>>().map(|_| Token {
+    empty::<&'a [Token<'a>], extra::Err<KleinDBParserError<'a>>>().map(|_| Token {
       text: "",
       token_type: TokenType::Dummy,
     }),
@@ -194,7 +264,7 @@ fn parse_dbnm<'a>()
 }
 
 fn parse_oneselect<'a>()
--> impl Parser<'a, &'a [Token<'a>], Select<'a>, extra::Err<Rich<'a, Token<'a>>>> + Clone {
+-> impl Parser<'a, &'a [Token<'a>], Select<'a>, extra::Err<KleinDBParserError<'a>>> + Clone {
   let selcollist = parse_selcollist();
 
   any()
@@ -206,26 +276,26 @@ fn parse_oneselect<'a>()
 }
 
 fn parse_select<'a>()
--> impl Parser<'a, &'a [Token<'a>], Select<'a>, extra::Err<Rich<'a, Token<'a>>>> + Clone {
+-> impl Parser<'a, &'a [Token<'a>], Select<'a>, extra::Err<KleinDBParserError<'a>>> + Clone {
   parse_oneselect()
 }
 
 fn parse_create_table_start<'a>(
   p_parse: Arc<Mutex<Parse<'a>>>,
-) -> impl Parser<'a, &'a [Token<'a>], Table, extra::Err<Rich<'a, Token<'a>>>> + Clone {
+) -> impl Parser<'a, &'a [Token<'a>], Table, extra::Err<KleinDBParserError<'a>>> + Clone {
   let a_parse = Arc::clone(&p_parse);
 
   // TODO: add omit_tempdb feature flag
   let temp = choice((
-    any::<&'a [Token<'a>], extra::Err<Rich<'a, Token<'a>>>>()
+    any::<&'a [Token<'a>], extra::Err<KleinDBParserError<'a>>>()
       .filter(|t: &Token| t.token_type == TokenType::TEMP)
       .padded_by(whitespace().repeated())
       .map(|_| true),
-    empty::<&'a [Token<'a>], extra::Err<Rich<'a, Token<'a>>>>().map(|_| false),
+    empty::<&'a [Token<'a>], extra::Err<KleinDBParserError<'a>>>().map(|_| false),
   ));
 
   let ifnotexists = choice((
-    any::<&'a [Token<'a>], extra::Err<Rich<'a, Token<'a>>>>()
+    any::<&'a [Token<'a>], extra::Err<KleinDBParserError<'a>>>()
       .filter(|t: &Token| t.token_type == TokenType::IF)
       .padded_by(whitespace().repeated())
       .then(
@@ -239,7 +309,7 @@ fn parse_create_table_start<'a>(
           .padded_by(whitespace().repeated()),
       )
       .map(|_| true),
-    empty::<&'a [Token<'a>], extra::Err<Rich<'a, Token<'a>>>>().map(|_| false),
+    empty::<&'a [Token<'a>], extra::Err<KleinDBParserError<'a>>>().map(|_| false),
   ));
 
   let create_kw = any()
@@ -332,7 +402,7 @@ enum ColumnList<'a> {
   Multiple(Box<ColumnList<'a>>, Option<Box<ColumnList<'a>>>),
 }
 fn parse_create_table_end<'a>()
--> impl Parser<'a, &'a [Token<'a>], ColumnList<'a>, extra::Err<Rich<'a, Token<'a>>>> + Clone {
+-> impl Parser<'a, &'a [Token<'a>], ColumnList<'a>, extra::Err<KleinDBParserError<'a>>> + Clone {
   let lp = any().filter(|t: &Token| t.token_type == TokenType::LeftParen);
   let rp = any().filter(|t: &Token| t.token_type == TokenType::RightParen);
 
@@ -488,7 +558,7 @@ fn unwrap_columnlist(clist: ColumnList, res: &mut Vec<Column>) {
 
 fn parse_create_table<'a>(
   p_parse: Arc<Mutex<Parse<'a>>>,
-) -> impl Parser<'a, &'a [Token<'a>], Table, extra::Err<Rich<'a, Token<'a>>>> + Clone {
+) -> impl Parser<'a, &'a [Token<'a>], Table, extra::Err<KleinDBParserError<'a>>> + Clone {
   let create_table = parse_create_table_start(Arc::clone(&p_parse));
 
   // Optional list of constraints after column definitions
@@ -506,9 +576,164 @@ fn parse_create_table<'a>(
   })
 }
 
+/// The SrcItem object represents a single term in the FROM clause of a query.
+/// The SrcList object is mostly an array of SrcItems.
+#[derive(Debug, PartialEq)]
+struct SrcItem {
+  name: String,
+  alias: Option<String>,
+}
+
+/// This object represents one or more tables that are the source of
+/// content for an SQL statement.  For example, a single SrcList object
+/// is used to hold the FROM clause of a SELECT statement.  SrcList also
+/// represents the target tables for DELETE, INSERT, and UPDATE statements.
+#[derive(Debug, PartialEq)]
+pub struct SrcList {
+  a: Vec<SrcItem>,
+}
+
+fn xfullname<'a>()
+-> impl Parser<'a, &'a [Token<'a>], SrcList, extra::Err<KleinDBParserError<'a>>> + Clone {
+  let nm = parse_name();
+  nm.clone()
+    .map(|t| SrcList {
+      a: vec![SrcItem {
+        alias: None,
+        name: t.text.to_string(),
+      }],
+    })
+    .map_err(|e| {
+      if let KleinDBParserError::ExpectedFound { span, .. } = e {
+        KleinDBParserError::InvalidFullDatabaseName(span)
+      } else {
+        e
+      }
+    })
+}
+
+fn match_token<'a>(
+  tt: TokenType,
+) -> impl Parser<'a, &'a [Token<'a>], Token<'a>, extra::Err<KleinDBParserError<'a>>> + Clone {
+  let target = tt.clone();
+  any()
+    .filter(move |t: &Token| t.token_type == target)
+    .map_err(move |e| {
+      if let KleinDBParserError::ExpectedFound { span, found, .. } = e {
+        KleinDBParserError::InvalidToken {
+          span,
+          expected: tt.clone(),
+          found: found,
+        }
+      } else {
+        e
+      }
+    })
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Update<'a> {
+  pub table_name: SrcList,
+  pub changes: ExprList<'a>,
+  pub where_expr: Option<Expr<'a>>,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum SetList<'a> {
+  // Base variants
+  SingleAssignment { name: Token<'a>, expr: Expr<'a> },
+
+  // Recursive variants
+  Assignment(Box<SetList<'a>>, Option<Box<SetList<'a>>>),
+}
+
+fn parse_empty<'a>()
+-> impl Parser<'a, &'a [Token<'a>], Token<'a>, extra::Err<KleinDBParserError<'a>>> + Clone {
+  empty::<&'a [Token<'a>], extra::Err<KleinDBParserError<'a>>>().map(|_| Token {
+    text: "",
+    token_type: TokenType::Dummy,
+  })
+}
+
+fn parse_from<'a>()
+-> impl Parser<'a, &'a [Token<'a>], Token<'a>, extra::Err<KleinDBParserError<'a>>> + Clone {
+  parse_empty()
+}
+
+pub enum WhereOptRet<'a> {
+  Empty,
+  WhereExpr(Expr<'a>),
+  Returning,
+}
+
+fn where_opt_ret<'a>()
+-> impl Parser<'a, &'a [Token<'a>], WhereOptRet<'a>, extra::Err<KleinDBParserError<'a>>> + Clone {
+  let expr = parse_expr().padded_by(whitespace().repeated());
+  choice((
+    match_token(TokenType::WHERE)
+      .padded_by(whitespace().repeated())
+      .ignore_then(expr)
+      .map(|exp| WhereOptRet::WhereExpr(exp)),
+    parse_empty().map(|t| WhereOptRet::Empty),
+  ))
+}
+
+fn parse_update<'a>(
+  p_parse: Arc<Mutex<Parse<'a>>>,
+) -> impl Parser<'a, &'a [Token<'a>], Update<'a>, extra::Err<KleinDBParserError<'a>>> + Clone {
+  let expr = parse_expr().padded_by(whitespace().repeated());
+  let nm = parse_name();
+
+  let assignment = nm
+    .padded_by(whitespace().repeated())
+    .then_ignore(match_token(TokenType::Eq).padded_by(whitespace().repeated()))
+    .then(expr)
+    .map(|(lhs, rhs)| {
+      SetList::SingleAssignment {
+        name: lhs,
+        expr: rhs,
+      }
+    });
+
+  let assignment_tail = match_token(TokenType::Comma)
+    .padded_by(whitespace().repeated())
+    .ignore_then(assignment.clone())
+    .map(|tail| SetList::Assignment(Box::new(tail), None));
+
+  let setlist = assignment
+    .clone()
+    .foldl(assignment_tail.repeated(), |init, tail| {
+      SetList::Assignment(Box::new(init), Some(Box::new(tail)))
+    });
+
+  match_token(TokenType::UPDATE)
+    .padded_by(whitespace().repeated())
+    .ignore_then(xfullname().padded_by(whitespace().repeated()))
+    .then_ignore(match_token(TokenType::SET).padded_by(whitespace().repeated()))
+    .then(setlist)
+    .then(parse_from())
+    .then(where_opt_ret().padded_by(whitespace().repeated()))
+    .map(
+      |(((name, setlst), _from), where_clause): (
+        ((SrcList, SetList<'_>), Token<'_>),
+        WhereOptRet<'_>,
+      )| {
+        Update {
+          table_name: name,
+          changes: ExprList { items: vec![] },
+          where_expr: match where_clause {
+            WhereOptRet::Empty => None,
+            WhereOptRet::WhereExpr(expr) => Some(expr),
+            WhereOptRet::Returning => None,
+          },
+        }
+      },
+    )
+}
+
 pub fn parser<'a>(
   p_parse: Arc<Mutex<Parse<'a>>>,
-) -> impl Parser<'a, &'a [Token<'a>], SQLCmdList<'a>, extra::Err<Rich<'a, Token<'a>>>> {
+) -> impl Parser<'a, &'a [Token<'a>], SQLCmdList<'a>, extra::Err<KleinDBParserError<'a>>> {
   let semi = any().filter(|t: &Token| t.is_semi());
 
   let cmd = choice((
@@ -519,6 +744,9 @@ pub fn parser<'a>(
     parse_create_table(Arc::clone(&p_parse))
       .then_ignore(semi.clone())
       .map(|node| Cmd::CreateTable(node)),
+    parse_update(Arc::clone(&p_parse))
+      .then_ignore(semi.clone())
+      .map(|node| Cmd::Update(node)),
   ))
   .padded_by(whitespace().repeated())
   .repeated()

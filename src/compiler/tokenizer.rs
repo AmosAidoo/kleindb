@@ -811,6 +811,8 @@ fn get_keyword_token_type(text: &str) -> TokenType {
     "UNBOUNDED" => TokenType::UNBOUNDED,
     "UNION" => TokenType::UNION,
     "UNIQUE" => TokenType::UNIQUE,
+    "UPDATE" => TokenType::UPDATE,
+    "WHERE" => TokenType::WHERE,
     _ => TokenType::Id,
   }
 }

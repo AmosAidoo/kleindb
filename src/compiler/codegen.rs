@@ -1,5 +1,5 @@
 use crate::{
-  OpFlags, Opcode, P4Type, Parse, SQLite3, SQLite3Stmt, SelectDest, SelectResultType,
+  OpFlags, Opcode, P4Type, Parse, SCHEMA_ROOT, SQLite3, SQLite3Stmt, SelectDest, SelectResultType,
   TextEncodings, TokenType, VdbeOp,
   compiler::parser::{Cmd, Expr, ExprList, SQLCmdList, Select, Table, sqlite3_finish_coding},
   storage::btree::{BtreeConstants, BtreeCreateTableFlags},
@@ -138,14 +138,20 @@ fn sqlite3_select(p_parse: &mut Parse, select: Select, dest: &mut SelectDest) {
 /// might change the database
 fn begin_write_operation(p_parse: &mut Parse) {}
 
+/// Open the sqlite_schema table stored in database number iDb for
+/// writing. The table is opened using cursor 0.
+fn open_schema_table(p_parse: &mut Parse, i_db: usize) {
+  let vdbe = &mut p_parse.vdbe;
+  // TODO: sqlite3TableLock()
+  vdbe.add_op4_int(Opcode::OpenWrite, 0, SCHEMA_ROOT, i_db as i32, 5);
+  // TODO: if( p->nTab==0 ) p->nTab = 1;
+}
+
 /// Generate byte-code for CREATE TABLE
 fn generate_create_table(p_parse: &mut Parse, table: Table) {
   // Begin generating the code that will insert the table record into
   // the schema table.
   begin_write_operation(p_parse);
-
-  let vdbe = &mut p_parse.vdbe;
-  let null_row = [6, 0, 0, 0, 0, 0].map(|c| c as u8 as char).iter().collect();
 
   // TODO: check omit_virtualtable feature flag
 
@@ -159,46 +165,67 @@ fn generate_create_table(p_parse: &mut Parse, table: Table) {
   p_parse.cr.reg_root = reg2 as i32;
   p_parse.n_mem += 1;
   let reg3 = p_parse.n_mem;
-  vdbe.sqlite3_add_op3(
-    Opcode::ReadCookie,
-    table.i_db as i32,
-    reg3 as i32,
-    BtreeConstants::FileFormat as i32,
-  );
-  // TODO: sqlite3VdbeUsesBtree
-  let addr1 = vdbe.sqlite3_add_op1(Opcode::If, reg3 as i32);
-  // TODO: Undetstand the file format numbers
-  let fileformat = 1;
-  vdbe.sqlite3_add_op3(
-    Opcode::SetCookie,
-    table.i_db as i32,
-    BtreeConstants::FileFormat as i32,
-    fileformat,
-  );
-  vdbe.sqlite3_add_op3(
-    Opcode::SetCookie,
-    table.i_db as i32,
-    BtreeConstants::TextEncoding as i32,
-    TextEncodings::Utf8 as i32,
-  );
-  vdbe.sqlite3_vdbe_jump_here(addr1);
+  {
+    let vdbe = &mut p_parse.vdbe;
+    vdbe.sqlite3_add_op3(
+      Opcode::ReadCookie,
+      table.i_db as i32,
+      reg3 as i32,
+      BtreeConstants::FileFormat as i32,
+    );
+    // TODO: sqlite3VdbeUsesBtree
+    let addr1 = vdbe.sqlite3_add_op1(Opcode::If, reg3 as i32);
+    // TODO: Undetstand the file format numbers
+    let fileformat = 4;
+    vdbe.sqlite3_add_op3(
+      Opcode::SetCookie,
+      table.i_db as i32,
+      BtreeConstants::FileFormat as i32,
+      fileformat,
+    );
+    vdbe.sqlite3_add_op3(
+      Opcode::SetCookie,
+      table.i_db as i32,
+      BtreeConstants::TextEncoding as i32,
+      TextEncodings::Utf8 as i32,
+    );
+    vdbe.sqlite3_vdbe_jump_here(addr1);
 
-  // This just creates a place-holder record in the sqlite_schema table.
-  // The record created does not contain anything yet.  It will be replaced
-  // by the real entry in code generated at sqlite3EndTable().
-  // TODO: if( isView || isVirtual )...
-  p_parse.cr.addr_cr_tab = vdbe.sqlite3_add_op3(
-    Opcode::CreateBtree,
-    table.i_db as i32,
-    reg2 as i32,
-    BtreeCreateTableFlags::IntKey as i32,
-  ) as i32;
-  // TODO: sqlite3OpenSchemaTable()
-  vdbe.sqlite3_add_op2(Opcode::NewRowid, 0, reg1 as i32);
-  vdbe.sqlite3_add_op4(Opcode::Blob, 6, reg3 as i32, 0, null_row, P4Type::Static);
-  vdbe.sqlite3_add_op3(Opcode::Insert, 0, reg3 as i32, reg1 as i32);
-  vdbe.sqlite3_vdbe_change_p5(OpFlags::APPEND);
-  vdbe.sqlite3_add_op0(Opcode::Close);
+    // This just creates a place-holder record in the sqlite_schema table.
+    // The record created does not contain anything yet.  It will be replaced
+    // by the real entry in code generated at sqlite3EndTable().
+    // TODO: if( isView || isVirtual )...
+    p_parse.cr.addr_cr_tab = vdbe.sqlite3_add_op3(
+      Opcode::CreateBtree,
+      table.i_db as i32,
+      reg2 as i32,
+      BtreeCreateTableFlags::IntKey as i32,
+    ) as i32;
+  }
+  open_schema_table(p_parse, table.i_db);
+  {
+    let null_row = [6, 0, 0, 0, 0, 0].map(|c| c as u8 as char).iter().collect();
+    let vdbe = &mut p_parse.vdbe;
+    vdbe.sqlite3_add_op2(Opcode::NewRowid, 0, reg1 as i32);
+    vdbe.sqlite3_add_op4(Opcode::Blob, 6, reg3 as i32, 0, null_row, P4Type::Static);
+    vdbe.sqlite3_add_op3(Opcode::Insert, 0, reg3 as i32, reg1 as i32);
+    vdbe.sqlite3_vdbe_change_p5(OpFlags::APPEND);
+    vdbe.sqlite3_add_op0(Opcode::Close);
+  }
+
+  // End table Code Gen starts from here
+  // TODO: if ( !db->init.busy )
+  {
+    let vdbe = &mut p_parse.vdbe;
+    vdbe.sqlite3_add_op1(Opcode::Close, 0);
+
+    // TODO: if( IsOrdinaryTable(p) ) ...
+
+    // TODO: If this is a CREATE TABLE xx AS SELECT ..., execute the SELECT
+    // statement to populate the new table. The root-page number for the
+
+    // Compute the complete text of the CREATE statement
+  }
 }
 
 // Generates bytecode for every SQL statement in the parse tree
@@ -216,6 +243,7 @@ pub fn generate_bytecode<'a>(p_parse: &mut Parse, ast: SQLCmdList<'a>) {
       Cmd::CreateTable(table) => {
         generate_create_table(p_parse, table);
       }
+      Cmd::Update(update) => {}
       // This case never happens as it is filtered out
       Cmd::Semi => {}
     }
