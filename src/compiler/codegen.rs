@@ -1,7 +1,13 @@
 use crate::{
   OpFlags, Opcode, P4Type, Parse, SCHEMA_ROOT, SQLite3, SQLite3Stmt, SelectDest, SelectResultType,
   TextEncodings, TokenType, VdbeOp,
-  compiler::parser::{Cmd, Expr, ExprList, SQLCmdList, Select, Table, sqlite3_finish_coding},
+  compiler::parser::{
+    Cmd, SQLCmdList,
+    create_table::Table,
+    expression::{Expr, ExprList},
+    select::Select,
+    sqlite3_finish_coding,
+  },
   storage::btree::{BtreeConstants, BtreeCreateTableFlags},
 };
 
