@@ -14,6 +14,7 @@ use crate::{
 /// Compile the UTF-8 encoded SQL statement zSql into a statement handle.
 fn sqlite3_prepare(db: &SQLite3, z_sql: &str) -> SQLite3Stmt {
   let tokens = tokenizer::tokenize(z_sql);
+  println!("{:?}", tokens);
 
   let parse_ctx = Arc::new(Mutex::new(Parse {
     db,
