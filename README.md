@@ -10,4 +10,8 @@ I am learning Rust so this choice was so I get better at it.
 
 This project contains a single binary crate and a library crate. The binary crate is an interactive shell for typing SQL statements and getting responses. The shell program that ships with SQLite was actually my entry point into the codebase. I figured that would be nicer since I can look at how it uses the public SQLite apis to execute the statements and dive deeper.
 
+## Technologies
+- Rust
+- [chumsky](https://github.com/zesterer/chumsky) - a parser combinator library
+
 ## Other sections: TODO
