@@ -359,34 +359,13 @@ mod tests {
       expr_list: ExprList {
         items: vec![
           ExprListItem {
-            p_expr: Expr {
-              token: Token {
-                text: "1",
-                token_type: TokenType::Integer,
-              },
-              p_left: None,
-              p_right: None,
-            },
+            p_expr: Expr::Integer(1),
           },
           ExprListItem {
-            p_expr: Expr {
-              token: Token {
-                text: "2",
-                token_type: TokenType::Integer,
-              },
-              p_left: None,
-              p_right: None,
-            },
+            p_expr: Expr::Integer(2),
           },
           ExprListItem {
-            p_expr: Expr {
-              token: Token {
-                text: "3",
-                token_type: TokenType::Integer,
-              },
-              p_left: None,
-              p_right: None,
-            },
+            p_expr: Expr::Integer(3),
           },
         ],
       },

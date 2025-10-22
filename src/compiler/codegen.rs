@@ -13,9 +13,8 @@ use crate::{
 
 /// Generate an instruction that will put the integer describe by
 /// text z[0..n-1] into register iMem.
-fn code_integer(p_parse: &mut Parse, expr: &Expr, neg_flag: bool, i_mem: i32) {
+fn code_integer(p_parse: &mut Parse, i: i32, neg_flag: bool, i_mem: i32) {
   let vdbe = &mut p_parse.vdbe;
-  let i: i32 = expr.token.text.parse().unwrap();
   let i = if neg_flag { -i } else { i };
   vdbe.sqlite3_add_op2(Opcode::Integer, i, i_mem);
 }
@@ -30,13 +29,26 @@ fn code_integer(p_parse: &mut Parse, expr: &Expr, neg_flag: bool, i_mem: i32) {
 /// must check the return code and move the results to the desired
 /// register.
 fn sqlite3_expr_code_target(p_parse: &mut Parse, expr: &Expr, target: i32) -> i32 {
-  match expr.token.token_type {
-    TokenType::Integer => {
-      code_integer(p_parse, expr, false, target);
-      target
+  let in_reg = target;
+  let mut reg_free1 = 0;
+  let mut reg_free2 = 0;
+  match expr {
+    Expr::Integer(i) => {
+      code_integer(p_parse, *i, false, target);
     }
-    _ => -1,
-  }
+    Expr::Add(left, right)
+    | Expr::Sub(left, right)
+    | Expr::Mul(left, right)
+    | Expr::Div(left, right)
+    | Expr::Mod(left, right) => {
+      let r1 = left.code_temp(p_parse, &mut reg_free1);
+      let r2 = right.code_temp(p_parse, &mut reg_free2);
+      let vdbe = &mut p_parse.vdbe;
+      vdbe.sqlite3_add_op3(Opcode::Add, r1, r2, target);
+    }
+    _ => {}
+  };
+  in_reg
 }
 
 /// Generate code that pushes the value of every element of the given
