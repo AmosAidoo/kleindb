@@ -487,6 +487,18 @@ pub enum Opcode {
   Close,
   CreateBtree,
   OpenWrite,
+  Add,
+  Subtract,
+  Remainder,
+  Divide,
+  Multiply,
+  And,
+  Or,
+  BitAnd,
+  BitOr,
+  ShiftLeft,
+  ShiftRight,
+  Concat,
 }
 
 pub const SCHEMA_ROOT: i32 = 1;
