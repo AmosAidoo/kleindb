@@ -1,18 +1,49 @@
-use crate::{Token, TokenType, compiler::parser::KleinDBParserError};
+use crate::{
+  Opcode, Parse, Token, TokenType,
+  compiler::parser::{KleinDBParserError, match_token, whitespace},
+};
 use chumsky::prelude::*;
 
-/// Each node of an expression in the parse tree is an instance
-/// of this structure.
 #[derive(Debug, PartialEq)]
-pub struct Expr<'a> {
-  // combination of Expr.op and Expr.u.zToken
-  pub token: Token<'a>,
+pub enum Expr<'a> {
+  Null,
+  Float(f64),
+  Blob(&'a str),
+  Integer(i32),
+  String(&'a str),
+  Variable,
 
-  /// Left subnode
-  pub p_left: Option<Box<Expr<'a>>>,
+  Add(Box<Expr<'a>>, Box<Expr<'a>>),
+  Sub(Box<Expr<'a>>, Box<Expr<'a>>),
+  Mul(Box<Expr<'a>>, Box<Expr<'a>>),
+  Div(Box<Expr<'a>>, Box<Expr<'a>>),
+  Mod(Box<Expr<'a>>, Box<Expr<'a>>),
 
-  /// Right subnode
-  pub p_right: Option<Box<Expr<'a>>>,
+  Concat(Box<Expr<'a>>, Box<Expr<'a>>),
+  Collate,
+}
+
+impl<'a> Expr<'a> {
+  pub fn code_temp(&self, p_parse: &mut Parse, reg: &mut i32) -> i32 {
+    // TODO: pExpr = sqlite3ExprSkipCollateAndLikely(pExpr)
+    // TODO: if( ConstFactorOk(pParse)
+    // && ALWAYS(pExpr!=0)
+    // && pExpr->op!=TK_REGISTER
+    // && sqlite3ExprIsConstantNotJoin(pParse, pExpr)
+    // )
+    *reg = 0;
+    self.run_just_once(p_parse, -1)
+  }
+
+  // Generate code that will evaluate expression pExpr just one time
+  // per prepared statement execution.
+  pub fn run_just_once(&self, p_parse: &mut Parse, reg_dest: i32) -> i32 {
+    1
+  }
+
+  // fn is_const(&self, p_parse: &mut Parse) -> i32 {}
+
+  // pub fn is_constant_not_join() -> i32 {}
 }
 
 #[derive(Debug, PartialEq)]
@@ -32,23 +63,46 @@ pub struct ExprList<'a> {
 
 pub fn parse_expr<'a>()
 -> impl Parser<'a, &'a [Token<'a>], Expr<'a>, extra::Err<KleinDBParserError<'a>>> + Clone {
-  let any_term = |tt: TokenType| {
-    any()
-      .filter(move |t: &Token| t.token_type == tt)
-      .map(|t| Expr {
-        token: t,
-        p_left: None,
-        p_right: None,
-      })
-  };
+  recursive(|expr| {
+    let any_term = |tt: TokenType| any().filter(move |t: &Token| t.token_type == tt);
 
-  let null = any_term(TokenType::NULL);
-  let float = any_term(TokenType::Float);
-  let blob = any_term(TokenType::Blob);
-  let integer = any_term(TokenType::Integer);
-  let string = any_term(TokenType::String);
+    let null = any_term(TokenType::NULL).map(|_| Expr::<'a>::Null);
+    let float = any_term(TokenType::Float).map(|t| Expr::Float(t.text.parse().unwrap()));
+    let blob = any_term(TokenType::Blob).map(|t| Expr::Blob(t.text));
+    let integer = any_term(TokenType::Integer).map(|t| Expr::Integer(t.text.parse().unwrap()));
+    let string = any_term(TokenType::String).map(|t| Expr::String(t.text));
 
-  let expr = recursive(|expr| choice((null, float, blob, string, integer)));
+    let term = choice((null, float, blob, string, integer));
 
-  expr
+    let atom = term
+      .or(expr.delimited_by(
+        match_token(TokenType::LeftParen),
+        match_token(TokenType::RightParen),
+      ))
+      .padded_by(whitespace().repeated());
+
+    let unary = atom;
+
+    let product = unary.clone().foldl(
+      match_token(TokenType::Star)
+        .to(Expr::Mul as fn(_, _) -> _)
+        .or(match_token(TokenType::Slash).to(Expr::Div as fn(_, _) -> _))
+        .padded_by(whitespace().repeated())
+        .then(unary)
+        .repeated(),
+      |lhs, (op, rhs): (fn(_, _) -> _, Expr)| op(Box::new(lhs), Box::new(rhs)),
+    );
+
+    let sum = product.clone().foldl(
+      match_token(TokenType::Plus)
+        .to(Expr::Add as fn(_, _) -> _)
+        .or(match_token(TokenType::Minus).to(Expr::Sub as fn(_, _) -> _))
+        .padded_by(whitespace().repeated())
+        .then(product)
+        .repeated(),
+      |lhs, (op, rhs): (fn(_, _) -> _, Expr)| op(Box::new(lhs), Box::new(rhs)),
+    );
+
+    sum
+  })
 }
