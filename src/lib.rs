@@ -394,6 +394,18 @@ impl<'a> Parse<'a> {
       Ok((p_name1, db.init.i_db.into()))
     }
   }
+
+  /// Prepare a virtual machine for execution for the first time after
+  /// creating the virtual machine. This involves things such
+  /// as allocating registers and initializing the program counter.
+  pub fn make_vdbe_ready(&mut self) {
+    self.vdbe.a_mem.append(&mut vec![
+      SQLite3Value {
+        value: MemValue::Undefined
+      };
+      self.n_mem
+    ]);
+  }
 }
 
 /// An instance of the following structure stores a database schema.
@@ -589,14 +601,7 @@ impl SQLite3Stmt {
     let mut stmt = Self {
       pc: 0,
       a_op: vec![],
-      // Not sure how many or what determines the number so I
-      // am making an initial guess till I figure it out
-      a_mem: vec![
-        SQLite3Value {
-          value: MemValue::Undefined
-        };
-        20
-      ],
+      a_mem: vec![],
       result_row: 0,
       n_res_column: 0,
     };

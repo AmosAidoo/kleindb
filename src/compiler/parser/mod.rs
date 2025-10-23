@@ -317,6 +317,10 @@ pub fn sqlite3_finish_coding(p_parse: &mut Parse) {
 
   // Finally, jump back to the beginning of the executable code
   vdbe.sqlite3_vdbe_goto(1);
+
+  // Get the VDBE program ready for execution
+  // TODO: if( pParse->nErr==0 )
+  p_parse.make_vdbe_ready();
 }
 
 #[cfg(test)]

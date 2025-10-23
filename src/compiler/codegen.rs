@@ -98,7 +98,7 @@ fn select_inner_loop(p_parse: &mut Parse, select: Select, src_tab: i32, dest: &m
   };
 
   // Pull the requested columns
-  let n_result_col = select.expr_list.items.len();
+  let n_result_col = select.expr_list.items.len() + 1;
   let e_dest = &dest.e_dest;
 
   if dest.i_sdst == 0 {
