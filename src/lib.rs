@@ -5,7 +5,7 @@ use std::{
 
 use bitflags::bitflags;
 
-use crate::storage::btree::Btree;
+use crate::{compiler::parser::expression::ExprList, storage::btree::Btree};
 
 pub mod compiler;
 pub mod storage;
@@ -346,6 +346,12 @@ pub struct Parse<'a> {
 
   /// unqualified schema object name
   s_name_token: Option<Token<'a>>,
+
+  /// OK to factor out constants
+  ok_const_factor: bool,
+
+  /// Constant expressions
+  const_expr: Option<ExprList<'a>>,
 
   /// These fields available when isCreate is true
   cr: Cr,
@@ -747,6 +753,51 @@ impl SQLite3Stmt {
         }
         Opcode::Integer => {
           self.a_mem[p_op.p2 as usize].value = MemValue::Integer(p_op.p1);
+          step_pc += 1;
+        }
+        Opcode::Add | Opcode::Subtract | Opcode::Multiply | Opcode::Divide | Opcode::Remainder => {
+          let a = &self.a_mem[p_op.p1 as usize].value;
+          let b = &self.a_mem[p_op.p2 as usize].value;
+
+          let res = match p_op.opcode {
+            Opcode::Add => {
+              let mut res = 0;
+              if let (MemValue::Integer(a_int), MemValue::Integer(b_int)) = (a, b) {
+                res = *b_int + *a_int;
+              }
+              MemValue::Integer(res)
+            }
+            Opcode::Subtract => {
+              let mut res = 0;
+              if let (MemValue::Integer(a_int), MemValue::Integer(b_int)) = (a, b) {
+                res = *b_int - *a_int;
+              }
+              MemValue::Integer(res)
+            }
+            Opcode::Multiply => {
+              let mut res = 0;
+              if let (MemValue::Integer(a_int), MemValue::Integer(b_int)) = (a, b) {
+                res = *b_int * *a_int;
+              }
+              MemValue::Integer(res)
+            }
+            Opcode::Divide => {
+              let mut res = 0;
+              if let (MemValue::Integer(a_int), MemValue::Integer(b_int)) = (a, b) {
+                res = *b_int / *a_int;
+              }
+              MemValue::Integer(res)
+            }
+            _ => {
+              let mut res = 0;
+              if let (MemValue::Integer(a_int), MemValue::Integer(b_int)) = (a, b) {
+                res = *b_int % *a_int;
+              }
+              MemValue::Integer(res)
+            }
+          };
+          let out = &mut self.a_mem[p_op.p3 as usize].value;
+          *out = res;
           step_pc += 1;
         }
         Opcode::ResultRow => {

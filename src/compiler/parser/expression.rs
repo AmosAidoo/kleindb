@@ -1,10 +1,13 @@
 use crate::{
   Opcode, Parse, Token, TokenType,
-  compiler::parser::{KleinDBParserError, match_token, whitespace},
+  compiler::{
+    codegen::sqlite3_expr_code_target,
+    parser::{KleinDBParserError, match_token, whitespace},
+  },
 };
 use chumsky::prelude::*;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Expr<'a> {
   Null,
   Float(f64),
@@ -24,39 +27,69 @@ pub enum Expr<'a> {
 }
 
 impl<'a> Expr<'a> {
-  pub fn code_temp(&self, p_parse: &mut Parse, reg: &mut i32) -> i32 {
+  pub fn code_temp(&self, p_parse: &mut Parse<'a>) -> i32 {
     // TODO: pExpr = sqlite3ExprSkipCollateAndLikely(pExpr)
     // TODO: if( ConstFactorOk(pParse)
     // && ALWAYS(pExpr!=0)
     // && pExpr->op!=TK_REGISTER
     // && sqlite3ExprIsConstantNotJoin(pParse, pExpr)
     // )
-    *reg = 0;
-    self.run_just_once(p_parse, -1)
+    if p_parse.ok_const_factor && self.is_constant_not_join() {
+      self.run_just_once(p_parse, -1)
+    } else {
+      // For now, ignore the register reuse optimization
+      // TODO: sqlite3GetTempReg(pParse)
+      let r1 = p_parse.n_mem;
+      p_parse.n_mem += 1;
+      sqlite3_expr_code_target(p_parse, self, r1 as i32)
+    }
   }
 
   // Generate code that will evaluate expression pExpr just one time
   // per prepared statement execution.
-  pub fn run_just_once(&self, p_parse: &mut Parse, reg_dest: i32) -> i32 {
-    1
+  pub fn run_just_once(&self, p_parse: &mut Parse<'a>, reg_dest: i32) -> i32 {
+    // TODO: if( regDest<0 && p )
+    // TODO: pExpr = sqlite3ExprDup(pParse->db, pExpr, 0);
+    let mut reg_dest = reg_dest;
+
+    // TODO: if( pExpr!=0 && ExprHasProperty(pExpr, EP_HasFunc) )
+    if reg_dest < 0 {
+      reg_dest = p_parse.n_mem as i32;
+      p_parse.n_mem += 1;
+    }
+    let item = ExprListItem {
+      p_expr: self.clone(),
+      const_expr_reg: Some(reg_dest),
+    };
+    if p_parse.const_expr.is_none() {
+      let mut res = ExprList { items: vec![] };
+      res.items.push(item);
+      p_parse.const_expr = Some(res);
+    } else {
+      p_parse.const_expr.as_mut().map(|ce| ce.items.push(item));
+    }
+    reg_dest
   }
 
-  // fn is_const(&self, p_parse: &mut Parse) -> i32 {}
-
-  // pub fn is_constant_not_join() -> i32 {}
+  // TODO
+  pub fn is_constant_not_join(&self) -> bool {
+    true
+  }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct ExprListItem<'a> {
   /// parse tree for expression
   pub p_expr: Expr<'a>,
+
+  pub const_expr_reg: Option<i32>,
 }
 
 /// A list of expressions.  Each expression may optionally have a
 /// name. An expr/name combination can be used in several ways, such
 /// as the list of "expr AS ID" fields following a "SELECT" or in the
 /// list of "ID = expr" items in an UPDATE.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct ExprList<'a> {
   pub items: Vec<ExprListItem<'a>>,
 }

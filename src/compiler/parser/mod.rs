@@ -4,7 +4,7 @@ pub mod expression;
 pub mod select;
 pub mod update;
 
-use crate::{Opcode, Parse, Token, TokenType};
+use crate::{Opcode, Parse, Token, TokenType, compiler::codegen::sqlite3_expr_code};
 use bitflags::bitflags;
 use chumsky::{
   DefaultExpected,
@@ -310,13 +310,30 @@ pub fn parser<'a>(
 /// VDBE program and resets the pParse structure for the next
 /// parse.
 pub fn sqlite3_finish_coding(p_parse: &mut Parse) {
-  let vdbe = &mut p_parse.vdbe;
+  {
+    let vdbe = &mut p_parse.vdbe;
 
-  vdbe.sqlite3_add_op0(Opcode::Halt);
-  vdbe.sqlite3_vdbe_jump_here(0);
+    vdbe.sqlite3_add_op0(Opcode::Halt);
+    vdbe.sqlite3_vdbe_jump_here(0);
+  }
+
+  // Code constant expressions that were factored out of inner loops
+  let const_expr = p_parse.const_expr.clone().unwrap();
+  println!("const_expr: {:?}", const_expr);
+  p_parse.ok_const_factor = false;
+  for expr_item in const_expr.items.iter() {
+    sqlite3_expr_code(
+      p_parse,
+      &expr_item.p_expr,
+      expr_item.const_expr_reg.unwrap(),
+    );
+  }
 
   // Finally, jump back to the beginning of the executable code
-  vdbe.sqlite3_vdbe_goto(1);
+  {
+    let vdbe = &mut p_parse.vdbe;
+    vdbe.sqlite3_vdbe_goto(1);
+  }
 
   // Get the VDBE program ready for execution
   // TODO: if( pParse->nErr==0 )
@@ -344,6 +361,8 @@ mod tests {
       vdbe: SQLite3Stmt::new(),
       n_mem: 0,
       s_name_token: None,
+      const_expr: None,
+      ok_const_factor: true,
       cr: Cr {
         addr_cr_tab: -1,
         reg_row_id: -1,
@@ -364,12 +383,15 @@ mod tests {
         items: vec![
           ExprListItem {
             p_expr: Expr::Integer(1),
+            const_expr_reg: None,
           },
           ExprListItem {
             p_expr: Expr::Integer(2),
+            const_expr_reg: None,
           },
           ExprListItem {
             p_expr: Expr::Integer(3),
+            const_expr_reg: None,
           },
         ],
       },

@@ -21,6 +21,8 @@ fn sqlite3_prepare(db: &SQLite3, z_sql: &str) -> SQLite3Stmt {
     vdbe: SQLite3Stmt::new(),
     n_mem: 0,
     s_name_token: None,
+    const_expr: None,
+    ok_const_factor: true,
     cr: Cr {
       addr_cr_tab: -1,
       reg_row_id: -1,

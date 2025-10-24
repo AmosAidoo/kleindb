@@ -28,10 +28,8 @@ fn code_integer(p_parse: &mut Parse, i: i32, neg_flag: bool, i_mem: i32) {
 /// register if it is convenient to do so.  The calling function
 /// must check the return code and move the results to the desired
 /// register.
-fn sqlite3_expr_code_target(p_parse: &mut Parse, expr: &Expr, target: i32) -> i32 {
+pub fn sqlite3_expr_code_target<'a>(p_parse: &mut Parse<'a>, expr: &Expr<'a>, target: i32) -> i32 {
   let in_reg = target;
-  let mut reg_free1 = 0;
-  let mut reg_free2 = 0;
   match expr {
     Expr::Integer(i) => {
       code_integer(p_parse, *i, false, target);
@@ -41,19 +39,38 @@ fn sqlite3_expr_code_target(p_parse: &mut Parse, expr: &Expr, target: i32) -> i3
     | Expr::Mul(left, right)
     | Expr::Div(left, right)
     | Expr::Mod(left, right) => {
-      let r1 = left.code_temp(p_parse, &mut reg_free1);
-      let r2 = right.code_temp(p_parse, &mut reg_free2);
+      let r1 = left.code_temp(p_parse);
+      let r2 = right.code_temp(p_parse);
       let vdbe = &mut p_parse.vdbe;
-      vdbe.sqlite3_add_op3(Opcode::Add, r1, r2, target);
+      let op = match expr {
+        Expr::Add(_, _) => Opcode::Add,
+        Expr::Sub(_, _) => Opcode::Subtract,
+        Expr::Mul(_, _) => Opcode::Multiply,
+        Expr::Div(_, _) => Opcode::Divide,
+        _ => Opcode::Remainder,
+      };
+      vdbe.sqlite3_add_op3(op, r2, r1, target);
     }
     _ => {}
   };
   in_reg
 }
 
+/// Generate code that will evaluate expression pExpr and store the
+/// results in register target.  The results are guaranteed to appear
+/// in register target.
+pub fn sqlite3_expr_code<'a>(p_parse: &mut Parse<'a>, expr: &Expr<'a>, target: i32) {
+  let _ = sqlite3_expr_code_target(p_parse, expr, target);
+  // TODO: if( inReg!=target )
+}
+
 /// Generate code that pushes the value of every element of the given
 /// expression list into a sequence of registers beginning at target.
-fn sqlite3_expr_code_expr_list(p_parse: &mut Parse, p_list: &ExprList, target: i32) -> usize {
+fn sqlite3_expr_code_expr_list<'a>(
+  p_parse: &mut Parse<'a>,
+  p_list: &ExprList<'a>,
+  target: i32,
+) -> usize {
   let vdbe = &mut p_parse.vdbe;
   let mut n = p_list.items.len();
   for (i, p_item) in p_list.items.iter().enumerate() {
@@ -75,7 +92,7 @@ struct RowLoadInfo {
 
 /// This routine does the work of loading query data into an array of
 /// registers so that it can be added to the sorter.
-fn inner_loop_load_row(p_parse: &mut Parse, select: Select, p_info: &RowLoadInfo) {
+fn inner_loop_load_row<'a>(p_parse: &mut Parse<'a>, select: Select<'a>, p_info: &RowLoadInfo) {
   sqlite3_expr_code_expr_list(p_parse, &select.expr_list, p_info.reg_result as i32);
 }
 
@@ -91,7 +108,12 @@ const SQLITE_ECEL_OMITREF: u8 = 0x08; /* Omit if ExprList.u.x.iOrderByCol */
 /// are evaluated in order to get the data for this row.  If srcTab is
 /// zero or more, then data is pulled from srcTab and p->pEList is used only
 /// to get the number of columns and the collation sequence for each column.
-fn select_inner_loop(p_parse: &mut Parse, select: Select, src_tab: i32, dest: &mut SelectDest) {
+fn select_inner_loop<'a>(
+  p_parse: &mut Parse<'a>,
+  select: Select<'a>,
+  src_tab: i32,
+  dest: &mut SelectDest,
+) {
   let mut s_row_load_info = RowLoadInfo {
     reg_result: 0,
     ecel_flags: 0,
@@ -145,7 +167,7 @@ fn select_inner_loop(p_parse: &mut Parse, select: Select, src_tab: i32, dest: &m
 }
 
 /// Generate byte-code for the SELECT statement
-fn sqlite3_select(p_parse: &mut Parse, select: Select, dest: &mut SelectDest) {
+fn sqlite3_select<'a>(p_parse: &mut Parse<'a>, select: Select<'a>, dest: &mut SelectDest) {
   // sqlite3GenerateColumnNames does this but not implemented yet
   p_parse.vdbe.n_res_column = select.expr_list.items.len();
 
@@ -247,7 +269,7 @@ fn generate_create_table(p_parse: &mut Parse, table: Table) {
 }
 
 // Generates bytecode for every SQL statement in the parse tree
-pub fn generate_bytecode<'a>(p_parse: &mut Parse, ast: SQLCmdList<'a>) {
+pub fn generate_bytecode<'a>(p_parse: &mut Parse<'a>, ast: SQLCmdList<'a>) {
   for cmd in ast.list {
     match cmd {
       Cmd::Select(select) => {

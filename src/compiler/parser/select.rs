@@ -28,7 +28,10 @@ fn parse_selcollist<'a>()
       exprs
         .into_iter()
         .fold(ExprList { items: vec![] }, |mut acc, curr| {
-          acc.items.push(ExprListItem { p_expr: curr });
+          acc.items.push(ExprListItem {
+            p_expr: curr,
+            const_expr_reg: None,
+          });
           acc
         })
     })
