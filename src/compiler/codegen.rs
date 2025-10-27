@@ -34,6 +34,10 @@ pub fn sqlite3_expr_code_target<'a>(p_parse: &mut Parse<'a>, expr: &Expr<'a>, ta
     Expr::Integer(i) => {
       code_integer(p_parse, *i, false, target);
     }
+    Expr::String(s) => {
+      let vdbe = &mut p_parse.vdbe;
+      vdbe.load_string(target, s);
+    }
     Expr::Add(left, right)
     | Expr::Sub(left, right)
     | Expr::Mul(left, right)
@@ -159,7 +163,8 @@ fn select_inner_loop<'a>(
     let vdbe = &mut p_parse.vdbe;
     match e_dest {
       SelectResultType::Coroutine | SelectResultType::Output => {
-        vdbe.sqlite3_add_op2(Opcode::ResultRow, reg_result as i32, n_result_col as i32);
+        // Comeback later to why I did n_result_col - 1
+        vdbe.sqlite3_add_op2(Opcode::ResultRow, reg_result as i32, (n_result_col - 1) as i32);
       }
       _ => {}
     }
