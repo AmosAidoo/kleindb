@@ -517,6 +517,8 @@ pub enum Opcode {
   ShiftLeft,
   ShiftRight,
   Concat,
+  String,
+  String8
 }
 
 pub const SCHEMA_ROOT: i32 = 1;
@@ -532,7 +534,7 @@ pub enum TextEncodings {
 
 #[derive(Debug)]
 pub enum P4Union {
-  Strings(String),
+  String(String),
   Int32(i32),
   Int64(i64),
   Real(f64),
@@ -575,6 +577,7 @@ pub enum MemValue {
   Undefined,
   Integer(i32),
   Real(f64),
+  String(String)
 }
 
 /// These are Mems
@@ -669,9 +672,10 @@ impl SQLite3Stmt {
     p3: i32,
     p4: String,
     p4type: P4Type,
-  ) {
-    let addr = self.sqlite3_add_op3(op, p1, p2, p3);
-    self.sqlite3_vdbe_change_p4(addr as i32, p4, p4type);
+  ) -> i32 {
+    let addr = self.sqlite3_add_op3(op, p1, p2, p3) as i32;
+    self.sqlite3_vdbe_change_p4(addr, p4, p4type);
+    addr
   }
 
   /// Change the value of the P4 operand for a specific instruction.
@@ -710,7 +714,7 @@ impl SQLite3Stmt {
       // From the original source, if n is 0, the length of
       // p4 is calculated and n is updated, otherwise n is the
       // length of the string
-      self.a_op[addr].p4 = Some(P4Union::Strings(p4));
+      self.a_op[addr].p4 = Some(P4Union::String(p4));
       self.a_op[addr].p4type = Some(P4Type::Dynamic);
     }
   }
@@ -727,11 +731,16 @@ impl SQLite3Stmt {
   }
 
   pub fn sqlite3_column_text(&self, i: usize) -> String {
-    match self.a_mem[self.result_row + i].value {
+    match &self.a_mem[self.result_row + i].value {
       MemValue::Undefined => String::from("undefined"),
       MemValue::Integer(x) => x.to_string(),
       MemValue::Real(x) => x.to_string(),
+      MemValue::String(s) => s.to_string(),
     }
+  }
+
+  pub fn load_string(&mut self, dest: i32, strng: &str) -> i32 {
+    self.sqlite3_add_op4(Opcode::String8, 0, dest, 0, strng.to_string(), P4Type::Transient)
   }
 
   /// Execute as much of a VDBE program as we can.
@@ -753,6 +762,20 @@ impl SQLite3Stmt {
         }
         Opcode::Integer => {
           self.a_mem[p_op.p2 as usize].value = MemValue::Integer(p_op.p1);
+          step_pc += 1;
+        }
+        Opcode::String8 => {
+          // TODO: handle encoding stuff
+          // TODO: pOut = out2Prerelease(p, pOp);
+          p_op.opcode = Opcode::String;
+        }
+        Opcode::String => {
+          let out = &mut self.a_mem[p_op.p2 as usize];
+          if let Some(p4) = &p_op.p4 {
+            if let P4Union::String(s) = p4 {
+              out.value = MemValue::String(s.to_string())
+            }
+          }
           step_pc += 1;
         }
         Opcode::Add | Opcode::Subtract | Opcode::Multiply | Opcode::Divide | Opcode::Remainder => {
