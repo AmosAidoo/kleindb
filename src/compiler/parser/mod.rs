@@ -318,16 +318,17 @@ pub fn sqlite3_finish_coding(p_parse: &mut Parse) {
   }
 
   // Code constant expressions that were factored out of inner loops
-  let const_expr = p_parse.const_expr.clone().unwrap();
-  println!("const_expr: {:?}", const_expr);
-  p_parse.ok_const_factor = false;
-  for expr_item in const_expr.items.iter() {
-    sqlite3_expr_code(
-      p_parse,
-      &expr_item.p_expr,
-      expr_item.const_expr_reg.unwrap(),
-    );
+  if let Some(const_expr) = p_parse.const_expr.clone() {
+    p_parse.ok_const_factor = false;
+    for expr_item in const_expr.items.iter() {
+      sqlite3_expr_code(
+        p_parse,
+        &expr_item.p_expr,
+        expr_item.const_expr_reg.unwrap(),
+      );
+    }
   }
+  
 
   // Finally, jump back to the beginning of the executable code
   {
