@@ -22,6 +22,8 @@ pub enum Expr<'a> {
   Div(Box<Expr<'a>>, Box<Expr<'a>>),
   Mod(Box<Expr<'a>>, Box<Expr<'a>>),
 
+  Equal(Box<Expr<'a>>, Box<Expr<'a>>),
+
   Concat(Box<Expr<'a>>, Box<Expr<'a>>),
   Collate,
 }
@@ -116,6 +118,7 @@ pub fn parse_expr<'a>()
 
     let unary = atom;
 
+    // * / %
     let product = unary.clone().foldl(
       match_token(TokenType::Star)
         .to(Expr::Mul as fn(_, _) -> _)
@@ -126,6 +129,7 @@ pub fn parse_expr<'a>()
       |lhs, (op, rhs): (fn(_, _) -> _, Expr)| op(Box::new(lhs), Box::new(rhs)),
     );
 
+    // + -
     let sum = product.clone().foldl(
       match_token(TokenType::Plus)
         .to(Expr::Add as fn(_, _) -> _)
@@ -136,6 +140,15 @@ pub fn parse_expr<'a>()
       |lhs, (op, rhs): (fn(_, _) -> _, Expr)| op(Box::new(lhs), Box::new(rhs)),
     );
 
-    sum
+    let equality = sum.clone().foldl(
+      match_token(TokenType::Eq)
+        .to(Expr::Equal as fn(_, _) -> _)
+        .padded_by(whitespace().repeated())
+        .then(sum)
+        .repeated(),
+      |lhs, (op, rhs): (fn(_, _) -> _, Expr)| op(Box::new(lhs), Box::new(rhs)),
+    );
+
+    equality
   })
 }

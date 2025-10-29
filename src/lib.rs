@@ -518,7 +518,9 @@ pub enum Opcode {
   ShiftRight,
   Concat,
   String,
-  String8
+  String8,
+  Eq,
+  ZeroOrNull,
 }
 
 pub const SCHEMA_ROOT: i32 = 1;
@@ -555,6 +557,8 @@ bitflags! {
   #[derive(Debug)]
   pub struct OpFlags: u32 {
     const APPEND = 0x08;
+    const ISNOOP = 0x40;
+    const LENGTHARG = 0x40;
   }
 }
 
@@ -577,7 +581,7 @@ pub enum MemValue {
   Undefined,
   Integer(i32),
   Real(f64),
-  String(String)
+  String(String),
 }
 
 /// These are Mems
@@ -616,6 +620,10 @@ impl SQLite3Stmt {
     };
     stmt.sqlite3_add_op2(Opcode::Init, 0, 1);
     stmt
+  }
+
+  pub fn current_addr(&self) -> usize {
+    self.a_op.len()
   }
 
   pub fn sqlite3_add_op0(&mut self, op: Opcode) -> usize {
@@ -740,7 +748,14 @@ impl SQLite3Stmt {
   }
 
   pub fn load_string(&mut self, dest: i32, strng: &str) -> i32 {
-    self.sqlite3_add_op4(Opcode::String8, 0, dest, 0, strng.to_string(), P4Type::Transient)
+    self.sqlite3_add_op4(
+      Opcode::String8,
+      0,
+      dest,
+      0,
+      strng.to_string(),
+      P4Type::Transient,
+    )
   }
 
   /// Execute as much of a VDBE program as we can.
@@ -776,6 +791,31 @@ impl SQLite3Stmt {
               out.value = MemValue::String(s.to_string())
             }
           }
+          step_pc += 1;
+        }
+        Opcode::Eq => {
+          let in1 = &self.a_mem[p_op.p1 as usize];
+          let in3 = &self.a_mem[p_op.p3 as usize];
+
+          // TODO: affinity comparison
+          let res = match (&in1.value, &in3.value) {
+            (MemValue::Integer(a), MemValue::Integer(b)) => a == b,
+            (MemValue::Integer(a), MemValue::Real(b)) => *a as f64 == *b,
+            (MemValue::Real(a), MemValue::Integer(b)) => *a == *b as f64,
+            (MemValue::Real(a), MemValue::Real(b)) => a == b,
+            (MemValue::String(a), MemValue::String(b)) => a == b,
+            _ => { panic!("comparison between {:?} and {:?} not implemented yet", &in1.value, &in3.value) }
+          };
+
+          if res {
+            step_pc = p_op.p2 as usize;
+          } else {
+            step_pc += 1;
+          }
+        }
+        Opcode::ZeroOrNull => {
+          // TODO: Check and set null
+          self.a_mem[p_op.p2 as usize].value = MemValue::Integer(0);
           step_pc += 1;
         }
         Opcode::Add | Opcode::Subtract | Opcode::Multiply | Opcode::Divide | Opcode::Remainder => {

@@ -328,7 +328,6 @@ pub fn sqlite3_finish_coding(p_parse: &mut Parse) {
       );
     }
   }
-  
 
   // Finally, jump back to the beginning of the executable code
   {

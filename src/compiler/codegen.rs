@@ -19,6 +19,33 @@ fn code_integer(p_parse: &mut Parse, i: i32, neg_flag: bool, i_mem: i32) {
   vdbe.sqlite3_add_op2(Opcode::Integer, i, i_mem);
 }
 
+// TODO
+// fn binary_compare_p5(left: &Box<Expr>, right: &Box<Expr>, jump_if_null: i32)
+
+/// Generate code for a comparison operator.
+fn code_compare(
+  p_parse: &mut Parse,
+  left: &Box<Expr>,
+  right: &Box<Expr>,
+  opcode: Opcode,
+  in1: i32,
+  in2: i32,
+  dest: i32,
+  jump_if_null: i32,
+  is_commuted: bool,
+) -> i32 {
+  // TODO: Handle collations
+  let vdbe = &mut p_parse.vdbe;
+  // Assume SQLITE_AFF_NONE
+  // let p5 = binary_compare_p5(left, right, jump_if_null);
+  // Hmm, assuming SQLITE_AFF_NONE, OpFlags::LENGTHARG and OpFlags::ISNOOP
+  // have the same value 0x40
+  let p5 = OpFlags::LENGTHARG;
+  let addr = vdbe.sqlite3_add_op4(opcode, in2, dest, in1, String::new(), P4Type::CollSeq);
+  vdbe.sqlite3_vdbe_change_p5(p5);
+  addr
+}
+
 /// Generate code into the current Vdbe to evaluate the given
 /// expression.  Attempt to store the results in register "target".
 /// Return the register where results are stored.
@@ -37,6 +64,29 @@ pub fn sqlite3_expr_code_target<'a>(p_parse: &mut Parse<'a>, expr: &Expr<'a>, ta
     Expr::String(s) => {
       let vdbe = &mut p_parse.vdbe;
       vdbe.load_string(target, s);
+    }
+    Expr::Equal(left, right) => {
+      // TODO: if( sqlite3ExprIsVector(pLeft) )
+      let r1 = left.code_temp(p_parse);
+      let r2 = right.code_temp(p_parse);
+      let curr_addr = {
+        let vdbe = &mut p_parse.vdbe;
+        vdbe.sqlite3_add_op2(Opcode::Integer, 1, in_reg);
+        vdbe.current_addr() as i32
+      };
+      code_compare(
+        p_parse,
+        left,
+        right,
+        Opcode::Eq,
+        r1,
+        r2,
+        curr_addr + 2,
+        0,
+        false,
+      );
+      let vdbe = &mut p_parse.vdbe;
+      vdbe.sqlite3_add_op3(Opcode::ZeroOrNull, r1, in_reg, r2);
     }
     Expr::Add(left, right)
     | Expr::Sub(left, right)
@@ -142,7 +192,7 @@ fn select_inner_loop<'a>(
     //
   } else if !matches!(e_dest, SelectResultType::Exists) {
     // "ecel" is an abbreviation of "ExprCodeExprList"
-    let mut ecel_flags: u8 = if matches!(
+    let ecel_flags: u8 = if matches!(
       e_dest,
       SelectResultType::Mem | SelectResultType::Output | SelectResultType::Coroutine
     ) {
@@ -164,7 +214,11 @@ fn select_inner_loop<'a>(
     match e_dest {
       SelectResultType::Coroutine | SelectResultType::Output => {
         // Comeback later to why I did n_result_col - 1
-        vdbe.sqlite3_add_op2(Opcode::ResultRow, reg_result as i32, (n_result_col - 1) as i32);
+        vdbe.sqlite3_add_op2(
+          Opcode::ResultRow,
+          reg_result as i32,
+          (n_result_col - 1) as i32,
+        );
       }
       _ => {}
     }
