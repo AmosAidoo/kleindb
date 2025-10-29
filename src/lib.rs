@@ -5,7 +5,7 @@ use std::{
 
 use bitflags::bitflags;
 
-use crate::storage::btree::Btree;
+use crate::{compiler::parser::expression::ExprList, storage::btree::Btree};
 
 pub mod compiler;
 pub mod storage;
@@ -347,6 +347,12 @@ pub struct Parse<'a> {
   /// unqualified schema object name
   s_name_token: Option<Token<'a>>,
 
+  /// OK to factor out constants
+  ok_const_factor: bool,
+
+  /// Constant expressions
+  const_expr: Option<ExprList<'a>>,
+
   /// These fields available when isCreate is true
   cr: Cr,
 }
@@ -393,6 +399,18 @@ impl<'a> Parse<'a> {
       //  || (db->mDbFlags & DBFLAG_Vacuum)!=0);
       Ok((p_name1, db.init.i_db.into()))
     }
+  }
+
+  /// Prepare a virtual machine for execution for the first time after
+  /// creating the virtual machine. This involves things such
+  /// as allocating registers and initializing the program counter.
+  pub fn make_vdbe_ready(&mut self) {
+    self.vdbe.a_mem.append(&mut vec![
+      SQLite3Value {
+        value: MemValue::Undefined
+      };
+      self.n_mem
+    ]);
   }
 }
 
@@ -487,6 +505,22 @@ pub enum Opcode {
   Close,
   CreateBtree,
   OpenWrite,
+  Add,
+  Subtract,
+  Remainder,
+  Divide,
+  Multiply,
+  And,
+  Or,
+  BitAnd,
+  BitOr,
+  ShiftLeft,
+  ShiftRight,
+  Concat,
+  String,
+  String8,
+  Eq,
+  ZeroOrNull,
 }
 
 pub const SCHEMA_ROOT: i32 = 1;
@@ -502,7 +536,7 @@ pub enum TextEncodings {
 
 #[derive(Debug)]
 pub enum P4Union {
-  Strings(String),
+  String(String),
   Int32(i32),
   Int64(i64),
   Real(f64),
@@ -523,6 +557,8 @@ bitflags! {
   #[derive(Debug)]
   pub struct OpFlags: u32 {
     const APPEND = 0x08;
+    const ISNOOP = 0x40;
+    const LENGTHARG = 0x40;
   }
 }
 
@@ -545,6 +581,7 @@ pub enum MemValue {
   Undefined,
   Integer(i32),
   Real(f64),
+  String(String),
 }
 
 /// These are Mems
@@ -577,19 +614,16 @@ impl SQLite3Stmt {
     let mut stmt = Self {
       pc: 0,
       a_op: vec![],
-      // Not sure how many or what determines the number so I
-      // am making an initial guess till I figure it out
-      a_mem: vec![
-        SQLite3Value {
-          value: MemValue::Undefined
-        };
-        20
-      ],
+      a_mem: vec![],
       result_row: 0,
       n_res_column: 0,
     };
     stmt.sqlite3_add_op2(Opcode::Init, 0, 1);
     stmt
+  }
+
+  pub fn current_addr(&self) -> usize {
+    self.a_op.len()
   }
 
   pub fn sqlite3_add_op0(&mut self, op: Opcode) -> usize {
@@ -646,9 +680,10 @@ impl SQLite3Stmt {
     p3: i32,
     p4: String,
     p4type: P4Type,
-  ) {
-    let addr = self.sqlite3_add_op3(op, p1, p2, p3);
-    self.sqlite3_vdbe_change_p4(addr as i32, p4, p4type);
+  ) -> i32 {
+    let addr = self.sqlite3_add_op3(op, p1, p2, p3) as i32;
+    self.sqlite3_vdbe_change_p4(addr, p4, p4type);
+    addr
   }
 
   /// Change the value of the P4 operand for a specific instruction.
@@ -687,7 +722,7 @@ impl SQLite3Stmt {
       // From the original source, if n is 0, the length of
       // p4 is calculated and n is updated, otherwise n is the
       // length of the string
-      self.a_op[addr].p4 = Some(P4Union::Strings(p4));
+      self.a_op[addr].p4 = Some(P4Union::String(p4));
       self.a_op[addr].p4type = Some(P4Type::Dynamic);
     }
   }
@@ -704,11 +739,23 @@ impl SQLite3Stmt {
   }
 
   pub fn sqlite3_column_text(&self, i: usize) -> String {
-    match self.a_mem[self.result_row + i].value {
+    match &self.a_mem[self.result_row + i].value {
       MemValue::Undefined => String::from("undefined"),
       MemValue::Integer(x) => x.to_string(),
       MemValue::Real(x) => x.to_string(),
+      MemValue::String(s) => s.to_string(),
     }
+  }
+
+  pub fn load_string(&mut self, dest: i32, strng: &str) -> i32 {
+    self.sqlite3_add_op4(
+      Opcode::String8,
+      0,
+      dest,
+      0,
+      strng.to_string(),
+      P4Type::Transient,
+    )
   }
 
   /// Execute as much of a VDBE program as we can.
@@ -730,6 +777,90 @@ impl SQLite3Stmt {
         }
         Opcode::Integer => {
           self.a_mem[p_op.p2 as usize].value = MemValue::Integer(p_op.p1);
+          step_pc += 1;
+        }
+        Opcode::String8 => {
+          // TODO: handle encoding stuff
+          // TODO: pOut = out2Prerelease(p, pOp);
+          p_op.opcode = Opcode::String;
+        }
+        Opcode::String => {
+          let out = &mut self.a_mem[p_op.p2 as usize];
+          if let Some(p4) = &p_op.p4 {
+            if let P4Union::String(s) = p4 {
+              out.value = MemValue::String(s.to_string())
+            }
+          }
+          step_pc += 1;
+        }
+        Opcode::Eq => {
+          let in1 = &self.a_mem[p_op.p1 as usize];
+          let in3 = &self.a_mem[p_op.p3 as usize];
+
+          // TODO: affinity comparison
+          let res = match (&in1.value, &in3.value) {
+            (MemValue::Integer(a), MemValue::Integer(b)) => a == b,
+            (MemValue::Integer(a), MemValue::Real(b)) => *a as f64 == *b,
+            (MemValue::Real(a), MemValue::Integer(b)) => *a == *b as f64,
+            (MemValue::Real(a), MemValue::Real(b)) => a == b,
+            (MemValue::String(a), MemValue::String(b)) => a == b,
+            _ => { panic!("comparison between {:?} and {:?} not implemented yet", &in1.value, &in3.value) }
+          };
+
+          if res {
+            step_pc = p_op.p2 as usize;
+          } else {
+            step_pc += 1;
+          }
+        }
+        Opcode::ZeroOrNull => {
+          // TODO: Check and set null
+          self.a_mem[p_op.p2 as usize].value = MemValue::Integer(0);
+          step_pc += 1;
+        }
+        Opcode::Add | Opcode::Subtract | Opcode::Multiply | Opcode::Divide | Opcode::Remainder => {
+          let a = &self.a_mem[p_op.p1 as usize].value;
+          let b = &self.a_mem[p_op.p2 as usize].value;
+
+          let res = match p_op.opcode {
+            Opcode::Add => {
+              let mut res = 0;
+              if let (MemValue::Integer(a_int), MemValue::Integer(b_int)) = (a, b) {
+                res = *b_int + *a_int;
+              }
+              MemValue::Integer(res)
+            }
+            Opcode::Subtract => {
+              let mut res = 0;
+              if let (MemValue::Integer(a_int), MemValue::Integer(b_int)) = (a, b) {
+                res = *b_int - *a_int;
+              }
+              MemValue::Integer(res)
+            }
+            Opcode::Multiply => {
+              let mut res = 0;
+              if let (MemValue::Integer(a_int), MemValue::Integer(b_int)) = (a, b) {
+                res = *b_int * *a_int;
+              }
+              MemValue::Integer(res)
+            }
+            Opcode::Divide => {
+              let mut res = 0;
+              if let (MemValue::Integer(a_int), MemValue::Integer(b_int)) = (a, b) {
+                res = *b_int / *a_int;
+              }
+              MemValue::Integer(res)
+            }
+            _ => {
+              let mut res = 0;
+              if let (MemValue::Integer(a_int), MemValue::Integer(b_int)) = (a, b) {
+                res = *b_int % *a_int;
+              }
+              MemValue::Integer(res)
+            }
+          };
+          let out = &mut self.a_mem[p_op.p3 as usize].value;
+          *out = res;
           step_pc += 1;
         }
         Opcode::ResultRow => {

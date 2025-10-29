@@ -13,11 +13,37 @@ use crate::{
 
 /// Generate an instruction that will put the integer describe by
 /// text z[0..n-1] into register iMem.
-fn code_integer(p_parse: &mut Parse, expr: &Expr, neg_flag: bool, i_mem: i32) {
+fn code_integer(p_parse: &mut Parse, i: i32, neg_flag: bool, i_mem: i32) {
   let vdbe = &mut p_parse.vdbe;
-  let i: i32 = expr.token.text.parse().unwrap();
   let i = if neg_flag { -i } else { i };
   vdbe.sqlite3_add_op2(Opcode::Integer, i, i_mem);
+}
+
+// TODO
+// fn binary_compare_p5(left: &Box<Expr>, right: &Box<Expr>, jump_if_null: i32)
+
+/// Generate code for a comparison operator.
+fn code_compare(
+  p_parse: &mut Parse,
+  left: &Box<Expr>,
+  right: &Box<Expr>,
+  opcode: Opcode,
+  in1: i32,
+  in2: i32,
+  dest: i32,
+  jump_if_null: i32,
+  is_commuted: bool,
+) -> i32 {
+  // TODO: Handle collations
+  let vdbe = &mut p_parse.vdbe;
+  // Assume SQLITE_AFF_NONE
+  // let p5 = binary_compare_p5(left, right, jump_if_null);
+  // Hmm, assuming SQLITE_AFF_NONE, OpFlags::LENGTHARG and OpFlags::ISNOOP
+  // have the same value 0x40
+  let p5 = OpFlags::LENGTHARG;
+  let addr = vdbe.sqlite3_add_op4(opcode, in2, dest, in1, String::new(), P4Type::CollSeq);
+  vdbe.sqlite3_vdbe_change_p5(p5);
+  addr
 }
 
 /// Generate code into the current Vdbe to evaluate the given
@@ -29,19 +55,76 @@ fn code_integer(p_parse: &mut Parse, expr: &Expr, neg_flag: bool, i_mem: i32) {
 /// register if it is convenient to do so.  The calling function
 /// must check the return code and move the results to the desired
 /// register.
-fn sqlite3_expr_code_target(p_parse: &mut Parse, expr: &Expr, target: i32) -> i32 {
-  match expr.token.token_type {
-    TokenType::Integer => {
-      code_integer(p_parse, expr, false, target);
-      target
+pub fn sqlite3_expr_code_target<'a>(p_parse: &mut Parse<'a>, expr: &Expr<'a>, target: i32) -> i32 {
+  let in_reg = target;
+  match expr {
+    Expr::Integer(i) => {
+      code_integer(p_parse, *i, false, target);
     }
-    _ => -1,
-  }
+    Expr::String(s) => {
+      let vdbe = &mut p_parse.vdbe;
+      vdbe.load_string(target, s);
+    }
+    Expr::Equal(left, right) => {
+      // TODO: if( sqlite3ExprIsVector(pLeft) )
+      let r1 = left.code_temp(p_parse);
+      let r2 = right.code_temp(p_parse);
+      let curr_addr = {
+        let vdbe = &mut p_parse.vdbe;
+        vdbe.sqlite3_add_op2(Opcode::Integer, 1, in_reg);
+        vdbe.current_addr() as i32
+      };
+      code_compare(
+        p_parse,
+        left,
+        right,
+        Opcode::Eq,
+        r1,
+        r2,
+        curr_addr + 2,
+        0,
+        false,
+      );
+      let vdbe = &mut p_parse.vdbe;
+      vdbe.sqlite3_add_op3(Opcode::ZeroOrNull, r1, in_reg, r2);
+    }
+    Expr::Add(left, right)
+    | Expr::Sub(left, right)
+    | Expr::Mul(left, right)
+    | Expr::Div(left, right)
+    | Expr::Mod(left, right) => {
+      let r1 = left.code_temp(p_parse);
+      let r2 = right.code_temp(p_parse);
+      let vdbe = &mut p_parse.vdbe;
+      let op = match expr {
+        Expr::Add(_, _) => Opcode::Add,
+        Expr::Sub(_, _) => Opcode::Subtract,
+        Expr::Mul(_, _) => Opcode::Multiply,
+        Expr::Div(_, _) => Opcode::Divide,
+        _ => Opcode::Remainder,
+      };
+      vdbe.sqlite3_add_op3(op, r2, r1, target);
+    }
+    _ => {}
+  };
+  in_reg
+}
+
+/// Generate code that will evaluate expression pExpr and store the
+/// results in register target.  The results are guaranteed to appear
+/// in register target.
+pub fn sqlite3_expr_code<'a>(p_parse: &mut Parse<'a>, expr: &Expr<'a>, target: i32) {
+  let _ = sqlite3_expr_code_target(p_parse, expr, target);
+  // TODO: if( inReg!=target )
 }
 
 /// Generate code that pushes the value of every element of the given
 /// expression list into a sequence of registers beginning at target.
-fn sqlite3_expr_code_expr_list(p_parse: &mut Parse, p_list: &ExprList, target: i32) -> usize {
+fn sqlite3_expr_code_expr_list<'a>(
+  p_parse: &mut Parse<'a>,
+  p_list: &ExprList<'a>,
+  target: i32,
+) -> usize {
   let vdbe = &mut p_parse.vdbe;
   let mut n = p_list.items.len();
   for (i, p_item) in p_list.items.iter().enumerate() {
@@ -63,7 +146,7 @@ struct RowLoadInfo {
 
 /// This routine does the work of loading query data into an array of
 /// registers so that it can be added to the sorter.
-fn inner_loop_load_row(p_parse: &mut Parse, select: Select, p_info: &RowLoadInfo) {
+fn inner_loop_load_row<'a>(p_parse: &mut Parse<'a>, select: Select<'a>, p_info: &RowLoadInfo) {
   sqlite3_expr_code_expr_list(p_parse, &select.expr_list, p_info.reg_result as i32);
 }
 
@@ -79,14 +162,19 @@ const SQLITE_ECEL_OMITREF: u8 = 0x08; /* Omit if ExprList.u.x.iOrderByCol */
 /// are evaluated in order to get the data for this row.  If srcTab is
 /// zero or more, then data is pulled from srcTab and p->pEList is used only
 /// to get the number of columns and the collation sequence for each column.
-fn select_inner_loop(p_parse: &mut Parse, select: Select, src_tab: i32, dest: &mut SelectDest) {
+fn select_inner_loop<'a>(
+  p_parse: &mut Parse<'a>,
+  select: Select<'a>,
+  src_tab: i32,
+  dest: &mut SelectDest,
+) {
   let mut s_row_load_info = RowLoadInfo {
     reg_result: 0,
     ecel_flags: 0,
   };
 
   // Pull the requested columns
-  let n_result_col = select.expr_list.items.len();
+  let n_result_col = select.expr_list.items.len() + 1;
   let e_dest = &dest.e_dest;
 
   if dest.i_sdst == 0 {
@@ -104,7 +192,7 @@ fn select_inner_loop(p_parse: &mut Parse, select: Select, src_tab: i32, dest: &m
     //
   } else if !matches!(e_dest, SelectResultType::Exists) {
     // "ecel" is an abbreviation of "ExprCodeExprList"
-    let mut ecel_flags: u8 = if matches!(
+    let ecel_flags: u8 = if matches!(
       e_dest,
       SelectResultType::Mem | SelectResultType::Output | SelectResultType::Coroutine
     ) {
@@ -125,7 +213,12 @@ fn select_inner_loop(p_parse: &mut Parse, select: Select, src_tab: i32, dest: &m
     let vdbe = &mut p_parse.vdbe;
     match e_dest {
       SelectResultType::Coroutine | SelectResultType::Output => {
-        vdbe.sqlite3_add_op2(Opcode::ResultRow, reg_result as i32, n_result_col as i32);
+        // Comeback later to why I did n_result_col - 1
+        vdbe.sqlite3_add_op2(
+          Opcode::ResultRow,
+          reg_result as i32,
+          (n_result_col - 1) as i32,
+        );
       }
       _ => {}
     }
@@ -133,7 +226,7 @@ fn select_inner_loop(p_parse: &mut Parse, select: Select, src_tab: i32, dest: &m
 }
 
 /// Generate byte-code for the SELECT statement
-fn sqlite3_select(p_parse: &mut Parse, select: Select, dest: &mut SelectDest) {
+fn sqlite3_select<'a>(p_parse: &mut Parse<'a>, select: Select<'a>, dest: &mut SelectDest) {
   // sqlite3GenerateColumnNames does this but not implemented yet
   p_parse.vdbe.n_res_column = select.expr_list.items.len();
 
@@ -235,7 +328,7 @@ fn generate_create_table(p_parse: &mut Parse, table: Table) {
 }
 
 // Generates bytecode for every SQL statement in the parse tree
-pub fn generate_bytecode<'a>(p_parse: &mut Parse, ast: SQLCmdList<'a>) {
+pub fn generate_bytecode<'a>(p_parse: &mut Parse<'a>, ast: SQLCmdList<'a>) {
   for cmd in ast.list {
     match cmd {
       Cmd::Select(select) => {
