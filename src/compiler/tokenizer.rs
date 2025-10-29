@@ -235,7 +235,7 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
           TokenType::LT => {
             let token = Token {
               text: &sql[i..i + 1],
-              token_type: token_type,
+              token_type,
             };
             i += 1;
             token
@@ -243,7 +243,7 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
           _ => {
             let token = Token {
               text: &sql[i..i + 2],
-              token_type: token_type,
+              token_type,
             };
             i += 2;
             token
@@ -263,7 +263,7 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
           TokenType::GT => {
             let token = Token {
               text: &sql[i..i + 1],
-              token_type: token_type,
+              token_type,
             };
             i += 1;
             token
@@ -271,7 +271,7 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
           _ => {
             let token = Token {
               text: &sql[i..i + 2],
-              token_type: token_type,
+              token_type,
             };
             i += 2;
             token

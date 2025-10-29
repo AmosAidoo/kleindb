@@ -1,6 +1,5 @@
 use crate::{
-  OpFlags, Opcode, P4Type, Parse, SCHEMA_ROOT, SQLite3, SQLite3Stmt, SelectDest, SelectResultType,
-  TextEncodings, TokenType, VdbeOp,
+  OpFlags, Opcode, P4Type, Parse, SCHEMA_ROOT, SelectDest, SelectResultType, TextEncodings,
   compiler::parser::{
     Cmd, SQLCmdList,
     create_table::Table,
@@ -23,16 +22,17 @@ fn code_integer(p_parse: &mut Parse, i: i32, neg_flag: bool, i_mem: i32) {
 // fn binary_compare_p5(left: &Box<Expr>, right: &Box<Expr>, jump_if_null: i32)
 
 /// Generate code for a comparison operator.
+#[allow(clippy::too_many_arguments)]
 fn code_compare(
   p_parse: &mut Parse,
-  left: &Box<Expr>,
-  right: &Box<Expr>,
+  _left: &Expr,
+  _right: &Expr,
   opcode: Opcode,
   in1: i32,
   in2: i32,
   dest: i32,
-  jump_if_null: i32,
-  is_commuted: bool,
+  _jump_if_null: i32,
+  _is_commuted: bool,
 ) -> i32 {
   // TODO: Handle collations
   let vdbe = &mut p_parse.vdbe;
@@ -125,8 +125,7 @@ fn sqlite3_expr_code_expr_list<'a>(
   p_list: &ExprList<'a>,
   target: i32,
 ) -> usize {
-  let vdbe = &mut p_parse.vdbe;
-  let mut n = p_list.items.len();
+  let n = p_list.items.len();
   for (i, p_item) in p_list.items.iter().enumerate() {
     let expr = &p_item.p_expr;
 
@@ -151,9 +150,9 @@ fn inner_loop_load_row<'a>(p_parse: &mut Parse<'a>, select: Select<'a>, p_info: 
 }
 
 const SQLITE_ECEL_DUP: u8 = 0x01; /* Deep, not shallow copies */
-const SQLITE_ECEL_FACTOR: u8 = 0x02; /* Factor out constant terms */
-const SQLITE_ECEL_REF: u8 = 0x04; /* Use ExprList.u.x.iOrderByCol */
-const SQLITE_ECEL_OMITREF: u8 = 0x08; /* Omit if ExprList.u.x.iOrderByCol */
+const _SQLITE_ECEL_FACTOR: u8 = 0x02; /* Factor out constant terms */
+const _SQLITE_ECEL_REF: u8 = 0x04; /* Use ExprList.u.x.iOrderByCol */
+const _SQLITE_ECEL_OMITREF: u8 = 0x08; /* Omit if ExprList.u.x.iOrderByCol */
 
 /// This routine generates the code for the inside of the inner loop
 /// of a SELECT.
@@ -184,7 +183,7 @@ fn select_inner_loop<'a>(
 
   dest.n_sdst = n_result_col;
   // Start of memory holding full result (or 0)
-  let reg_origin = dest.i_sdst;
+  let _reg_origin = dest.i_sdst;
   // Start of memory holding current results
   let reg_result = dest.i_sdst;
 
@@ -235,7 +234,7 @@ fn sqlite3_select<'a>(p_parse: &mut Parse<'a>, select: Select<'a>, dest: &mut Se
 
 /// Generate VDBE code that prepares for doing an operation that
 /// might change the database
-fn begin_write_operation(p_parse: &mut Parse) {}
+fn begin_write_operation(_p_parse: &mut Parse) {}
 
 /// Open the sqlite_schema table stored in database number iDb for
 /// writing. The table is opened using cursor 0.
@@ -342,7 +341,7 @@ pub fn generate_bytecode<'a>(p_parse: &mut Parse<'a>, ast: SQLCmdList<'a>) {
       Cmd::CreateTable(table) => {
         generate_create_table(p_parse, table);
       }
-      Cmd::Update(update) => {}
+      Cmd::Update(_update) => {}
       // This case never happens as it is filtered out
       Cmd::Semi => {}
     }

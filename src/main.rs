@@ -9,9 +9,10 @@ use kleindb::{
   KleinDBContext, SQLite3, StepStatus, compiler::prepare::sqlite3_prepare_v2, is_id_char,
 };
 
-const MAIN_PROMPT: &str = "sqlite> ";
+const MAIN_PROMPT: &str = "kleindb> ";
 const CONTINUATION_PROMPT: &str = "   ...> ";
 
+#[allow(dead_code)]
 enum ShellOpenModes {
   /// No open-mode specified
   Unspec,
@@ -47,6 +48,7 @@ struct ShellState<'a> {
   /// Write results here
   out: Box<dyn Write + 'static>,
 
+  #[allow(dead_code)]
   open_mode: ShellOpenModes,
 
   /// Line number of last line read from in
@@ -113,15 +115,12 @@ enum ShellExecError {}
 
 impl ShellState<'_> {
   fn process_input(&mut self) {
-    // A single input line
-    let mut z_line: Option<String> = None;
     // Accumulated SQL text
     let mut z_sql: String = String::new();
     // Length of current line
     let mut n_line: usize = 0;
     // Bytes of zSql[] used
     let mut n_sql: usize = 0;
-    let mut err_cnt = 0;
     let mut startline: usize = 0;
 
     // I have left out all the codes that have got to do with
@@ -132,8 +131,9 @@ impl ShellState<'_> {
     self.lineno = 0;
     // There were 2 more conditions in sqlite3
     // !bail_on_error || (p->in==0 && stdin_is_interactive)
-    while err_cnt == 0 {
-      z_line = self.one_input_line(n_sql > 0);
+    // err_count == 0
+    loop {
+      let z_line = self.one_input_line(n_sql > 0);
       if let Some(line) = z_line.as_ref() {
         self.lineno += 1;
 
@@ -177,7 +177,7 @@ impl ShellState<'_> {
     let db_filename = &self.a_aux_db[0].db_filename;
 
     // TODO: Handle all the open modes
-    self.ctx.sqlite3_open_v2(db_filename);
+    let _ = self.ctx.sqlite3_open_v2(db_filename);
 
     // TODO: Initialize/load functions
   }
@@ -202,7 +202,7 @@ impl ShellState<'_> {
   }
 
   /// Run a single line of SQL.  Return the number of errors.
-  fn run_one_sql_line(&mut self, z_sql: &str, startline: usize) {
+  fn run_one_sql_line(&mut self, z_sql: &str, _startline: usize) {
     self.open_db();
     let _ = self.shell_exec(z_sql);
   }
@@ -282,7 +282,7 @@ fn main() {
 
   for arg in args {
     println!("{arg}");
-    if arg.chars().nth(0) != Some('-') {
+    if !arg.starts_with('-') {
       // This is the name of the database
       if shell_state.a_aux_db[0].db_filename.is_empty() {
         shell_state.a_aux_db[0].db_filename = arg;
