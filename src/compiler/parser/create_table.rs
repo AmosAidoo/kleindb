@@ -127,9 +127,12 @@ fn parse_create_table_start<'a>(
 
         parse.s_name_token = p_name;
 
-        // TODO: Test for namespace collision
+        // TODO: Test for namespace collisio
 
-        let table = Table {
+        // TODO: Begin generating the code that will insert the table record into
+        // the schema table.
+        // Not sure if this should be moved into the codegen module for now
+        Table {
           name: z_name.to_string(),
           p_key: None,
           // schema: Arc::clone(&db.a_db[i_db].schema.as_ref().unwrap()),
@@ -137,12 +140,7 @@ fn parse_create_table_start<'a>(
           n_tab_ref: 1,
           a_col: vec![],
           i_db,
-        };
-
-        // TODO: Begin generating the code that will insert the table record into
-        // the schema table.
-        // Not sure if this should be moved into the codegen module for now
-        table
+        }
       },
     )
 }
@@ -158,14 +156,12 @@ fn parse_create_table_end<'a>()
   let ids = any().filter(|t: &Token| matches!(t.token_type, TokenType::Id | TokenType::String));
 
   let typename_tail = ids
-    .clone()
     .padded_by(whitespace().repeated())
     .map(|t: Token| TypeName::Multiple(Box::new(TypeName::Single(t)), None));
 
   // Returns a list of tokens representing the type.
   // For example, a type can be UNSIGNED BIG INT
   let typename = ids
-    .clone()
     .padded_by(whitespace().repeated())
     .map(|t: Token| TypeName::Single(t))
     .foldl(typename_tail.repeated(), |tn, tail| {
@@ -178,8 +174,8 @@ fn parse_create_table_end<'a>()
   let plus_num = choice((
     any()
       .filter(|t: &Token| t.token_type == TokenType::Plus)
-      .ignore_then(number.clone()),
-    number.clone(),
+      .ignore_then(number),
+    number,
   ));
   let minus_num = any()
     .filter(|t: &Token| t.token_type == TokenType::Minus)
@@ -190,11 +186,11 @@ fn parse_create_table_end<'a>()
   let typetoken = choice((
     typename
       .clone()
-      .then_ignore(lp.clone().padded_by(whitespace().repeated()))
+      .then_ignore(lp.padded_by(whitespace().repeated()))
       .then(signed)
-      .then_ignore(rp.clone().padded_by(whitespace().repeated()))
+      .then_ignore(rp.padded_by(whitespace().repeated()))
       .map(|(tn, signed)| TypeToken::TypeNameWithSigned(tn, signed)),
-    typename.clone().map(|t| TypeToken::TypeName(t)),
+    typename.clone().map(TypeToken::TypeName),
     empty().map(|_| TypeToken::Empty),
   ));
 
@@ -208,7 +204,7 @@ fn parse_create_table_end<'a>()
 
   // TODO: carglist
   let comma = any().filter(|t: &Token| t.token_type == TokenType::Comma);
-  let columnlist_tail = comma.clone().ignore_then(
+  let columnlist_tail = comma.ignore_then(
     columnname
       .clone()
       .map(|t: ColumnName| ColumnList::Multiple(Box::new(ColumnList::Single(t)), None)),
@@ -216,7 +212,7 @@ fn parse_create_table_end<'a>()
 
   let columnlist = columnname
     .clone()
-    .map(|cn| ColumnList::Single(cn))
+    .map(ColumnList::Single)
     .foldl(columnlist_tail.repeated(), |lhs, tail| {
       ColumnList::Multiple(Box::new(lhs), Some(Box::new(tail)))
     });
@@ -270,7 +266,7 @@ fn unwrap_columnlist(clist: ColumnList, res: &mut Vec<Column>) {
         }
       };
 
-      let mut col = Column {
+      let col = Column {
         name: cn.name.text.to_string(),
         datatype: dtype,
         collating_sequence: None,

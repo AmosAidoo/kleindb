@@ -1,5 +1,5 @@
 use crate::{
-  Opcode, Parse, Token, TokenType,
+  Parse, Token, TokenType,
   compiler::{
     codegen::sqlite3_expr_code_target,
     parser::{KleinDBParserError, match_token, whitespace},
@@ -67,8 +67,8 @@ impl<'a> Expr<'a> {
       let mut res = ExprList { items: vec![] };
       res.items.push(item);
       p_parse.const_expr = Some(res);
-    } else {
-      p_parse.const_expr.as_mut().map(|ce| ce.items.push(item));
+    } else if let Some(ce) = p_parse.const_expr.as_mut() {
+      ce.items.push(item)
     }
     reg_dest
   }
@@ -140,15 +140,14 @@ pub fn parse_expr<'a>()
       |lhs, (op, rhs): (fn(_, _) -> _, Expr)| op(Box::new(lhs), Box::new(rhs)),
     );
 
-    let equality = sum.clone().foldl(
+    // equality
+    sum.clone().foldl(
       match_token(TokenType::Eq)
         .to(Expr::Equal as fn(_, _) -> _)
         .padded_by(whitespace().repeated())
         .then(sum)
         .repeated(),
       |lhs, (op, rhs): (fn(_, _) -> _, Expr)| op(Box::new(lhs), Box::new(rhs)),
-    );
-
-    equality
+    )
   })
 }

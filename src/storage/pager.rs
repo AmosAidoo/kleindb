@@ -1,4 +1,4 @@
-use std::{fs::File, sync::Arc};
+use std::sync::Arc;
 
 use crate::KleinDBError;
 
@@ -10,11 +10,11 @@ pub struct Pager {
 #[derive(Debug)]
 pub struct PCache {}
 
-const SQLITE_DEFAULT_PAGE_SIZE: usize = 4096;
+const _SQLITE_DEFAULT_PAGE_SIZE: usize = 4096;
 
 impl Pager {
   /// Allocate and initialize a new Pager object
-  pub fn open(filename: &str) -> Result<Self, KleinDBError> {
+  pub fn open(_filename: &str) -> Result<Self, KleinDBError> {
     // TODO: Figure out how much space is required for each journal file-handle
     // (there are two of them, the main journal and the sub-journal).
 

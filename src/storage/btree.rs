@@ -1,11 +1,9 @@
-use std::{
-  ops::{Deref, DerefMut},
-  sync::Arc,
-};
+use std::sync::Arc;
 
 use crate::{KleinDBError, SQLite3, Schema, storage::pager::Pager};
 
 #[derive(Debug)]
+#[allow(dead_code)]
 enum InTransaction {
   None,
   Read,
@@ -13,6 +11,7 @@ enum InTransaction {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct Btree {
   in_trans: InTransaction,
   // sharable: bool,
@@ -51,6 +50,12 @@ pub enum BtreeCreateTableFlags {
 pub struct BtCursor {}
 pub struct BtreePayload {}
 
+impl Default for Btree {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
 impl Btree {
   pub fn new() -> Self {
     Self {
@@ -60,9 +65,9 @@ impl Btree {
   }
 
   /// Open a database file
-  pub fn open(filename: &str, db: &SQLite3) -> Result<Self, KleinDBError> {
-    let is_temp_db = false;
-    let is_mem_db = if cfg!(feature = "omit_memorydb") {
+  pub fn open(filename: &str, _db: &SQLite3) -> Result<Self, KleinDBError> {
+    let _is_temp_db = false;
+    let _is_mem_db = if cfg!(feature = "omit_memorydb") {
       false
     } else {
       filename == ":memory:"

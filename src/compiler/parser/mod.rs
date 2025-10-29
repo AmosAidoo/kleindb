@@ -233,7 +233,7 @@ fn match_token<'a>(
         KleinDBParserError::InvalidToken {
           span,
           expected: tt.clone(),
-          found: found,
+          found,
         }
       } else {
         e
@@ -268,8 +268,8 @@ fn where_opt_ret<'a>()
     match_token(TokenType::WHERE)
       .padded_by(whitespace().repeated())
       .ignore_then(expr)
-      .map(|exp| WhereOptRet::WhereExpr(exp)),
-    parse_empty().map(|t| WhereOptRet::Empty),
+      .map(WhereOptRet::WhereExpr),
+    parse_empty().map(|_| WhereOptRet::Empty),
   ))
 }
 
@@ -278,17 +278,16 @@ pub fn parser<'a>(
 ) -> impl Parser<'a, &'a [Token<'a>], SQLCmdList<'a>, extra::Err<KleinDBParserError<'a>>> {
   let semi = any().filter(|t: &Token| t.is_semi());
 
-  let cmd = choice((
-    semi.clone().map(|_| Cmd::Semi),
-    select::parse_select()
-      .then_ignore(semi.clone())
-      .map(|node| Cmd::Select(node)),
+  // cmd
+  choice((
+    semi.map(|_| Cmd::Semi),
+    select::parse_select().then_ignore(semi).map(Cmd::Select),
     create_table::parse_create_table(Arc::clone(&p_parse))
-      .then_ignore(semi.clone())
-      .map(|node| Cmd::CreateTable(node)),
+      .then_ignore(semi)
+      .map(Cmd::CreateTable),
     update::parse_update(Arc::clone(&p_parse))
-      .then_ignore(semi.clone())
-      .map(|node| Cmd::Update(node)),
+      .then_ignore(semi)
+      .map(Cmd::Update),
   ))
   .padded_by(whitespace().repeated())
   .repeated()
@@ -299,9 +298,7 @@ pub fn parser<'a>(
       .into_iter()
       .filter(|cmd| !matches!(cmd, Cmd::Semi))
       .collect(),
-  });
-
-  cmd
+  })
 }
 
 /// This routine is called after a single SQL statement has been

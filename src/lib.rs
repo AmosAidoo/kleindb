@@ -1,7 +1,4 @@
-use std::{
-  collections::HashMap,
-  sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 use bitflags::bitflags;
 
@@ -59,13 +56,14 @@ pub struct KleinDBContext {
 }
 
 impl KleinDBContext {
-  pub fn sqlite3_step(&mut self) -> Result<StepStatus, ()> {
+  pub fn sqlite3_step(&mut self) -> Result<StepStatus, KleinDBError> {
     // TODO: Enter db mutex
     // TODO: Retry if schema changes
     if let Some(vdbe) = &mut self.vdbe {
       Ok(vdbe.sqlite3_step())
     } else {
-      Err(())
+      // Will come back to this
+      Err(KleinDBError::Error)
     }
   }
 
@@ -74,6 +72,7 @@ impl KleinDBContext {
   }
 
   // TODO
+  #[allow(dead_code)]
   fn sqlite3_parse_url() {}
 
   /// This routine does the work of opening a database on behalf of
@@ -106,17 +105,17 @@ impl KleinDBContext {
 
   /// Find and return the schema associated with a BTree.  Create
   /// a new one if necessary.
+  #[allow(dead_code)]
   fn sqlite3_schema_get(mut bt: Option<&mut Btree>) -> Arc<Schema> {
-    let schema = if let Some(btr) = bt.as_mut() {
+    // TODO: Oom check and file_format check
+    if let Some(btr) = bt.as_mut() {
       btr.schema()
     } else {
       Arc::new(Schema {
         schema_cookie: 0,
         i_generation: 0,
       })
-    };
-    // TODO: Oom checn and file_format check
-    schema
+    }
   }
 
   pub fn sqlite3_open_v2(&mut self, filename: &str) -> Result<(), KleinDBError> {
@@ -125,6 +124,7 @@ impl KleinDBContext {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+#[allow(non_camel_case_types)]
 pub enum TokenType {
   // Dummy Token
   Dummy,
@@ -377,13 +377,13 @@ impl<'a> Parse<'a> {
     &self,
     p_name1: &'a Token,
     p_name2: &'a Token,
-  ) -> Result<(&'a Token<'a>, usize), ()> {
+  ) -> Result<(&'a Token<'a>, usize), KleinDBError> {
     let db = self.db;
-    if p_name2.text.len() > 0 {
+    if !p_name2.text.is_empty() {
       // Same as token_type == Dummy
       if db.init.busy {
         // corrupt database
-        return Err(());
+        return Err(KleinDBError::Corrupt);
       }
 
       let i_db = sqlite3_find_db(db, p_name1);
@@ -391,7 +391,8 @@ impl<'a> Parse<'a> {
       if let Some(i) = i_db {
         Ok((p_name2, i))
       } else {
-        Err(())
+        // Come back to this later
+        Err(KleinDBError::Error)
       }
     } else {
       // TODO: Look at this assert more closely
@@ -463,6 +464,12 @@ pub struct SQLite3 {
   pub init: SQLite3InitInfo,
 }
 
+impl Default for SQLite3 {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
 impl SQLite3 {
   pub fn new() -> Self {
     Self {
@@ -479,12 +486,10 @@ impl SQLite3 {
     let i = self.a_db.iter().position(|db| db.db_schema_name == z_name);
     if let Some(idx) = i {
       Some(idx)
+    } else if self.a_db.iter().position(|db| db.db_schema_name == "main") == Some(0) {
+      Some(0)
     } else {
-      if self.a_db.iter().position(|db| db.db_schema_name == "main") == Some(0) {
-        Some(0)
-      } else {
-        None
-      }
+      None
     }
   }
 }
@@ -608,6 +613,12 @@ pub struct SQLite3Stmt {
   pub n_res_column: usize,
 }
 
+impl Default for SQLite3Stmt {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
 impl SQLite3Stmt {
   // Create a new virtual database engine.
   pub fn new() -> Self {
@@ -688,13 +699,13 @@ impl SQLite3Stmt {
 
   /// Change the value of the P4 operand for a specific instruction.
   pub fn sqlite3_vdbe_change_p4(&mut self, addr: i32, p4: String, n: P4Type) {
-    let mut addr = addr as usize;
+    let mut addr = addr;
     if addr < 0 {
-      addr = self.a_op.len() - 1;
+      addr = (self.a_op.len() - 1) as i32;
     }
-    let op = &self.a_op[addr];
+    let op = &self.a_op[addr as usize];
     if n.clone() as i32 >= 0 || op.p4type.is_some() {
-      self.vdbe_change_p4_full(addr, p4, n);
+      self.vdbe_change_p4_full(addr as usize, p4, n);
     }
     // TODO: Handle P4_INT32
   }
@@ -764,6 +775,7 @@ impl SQLite3Stmt {
     let n = self.a_op.len() as i32;
     let mut step_pc: usize = self.pc;
 
+    #[allow(unused_assignments)]
     let mut status = StepStatus::Ok;
     loop {
       let p_op = &mut self.a_op[step_pc];
@@ -786,10 +798,8 @@ impl SQLite3Stmt {
         }
         Opcode::String => {
           let out = &mut self.a_mem[p_op.p2 as usize];
-          if let Some(p4) = &p_op.p4 {
-            if let P4Union::String(s) = p4 {
-              out.value = MemValue::String(s.to_string())
-            }
+          if let Some(P4Union::String(s)) = &p_op.p4 {
+            out.value = MemValue::String(s.to_string())
           }
           step_pc += 1;
         }
@@ -804,7 +814,12 @@ impl SQLite3Stmt {
             (MemValue::Real(a), MemValue::Integer(b)) => *a == *b as f64,
             (MemValue::Real(a), MemValue::Real(b)) => a == b,
             (MemValue::String(a), MemValue::String(b)) => a == b,
-            _ => { panic!("comparison between {:?} and {:?} not implemented yet", &in1.value, &in3.value) }
+            _ => {
+              panic!(
+                "comparison between {:?} and {:?} not implemented yet",
+                &in1.value, &in3.value
+              )
+            }
           };
 
           if res {
@@ -937,11 +952,7 @@ pub struct SelectDest {
 
 pub fn is_id_char(ch: u8) -> bool {
   // Identifiers are alphanumerics, "_", "$", and any non-ASCII UTF character.
-  match ch {
-    b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'$' | b'_' => true,
-    128..=255 => true,
-    _ => false,
-  }
+  matches!(ch, b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'$' | b'_' | 128..=255)
 }
 
 pub fn sqlite3_find_db(db: &SQLite3, p_name: &Token) -> Option<usize> {
@@ -949,13 +960,13 @@ pub fn sqlite3_find_db(db: &SQLite3, p_name: &Token) -> Option<usize> {
   db.sqlite3_find_db_name(z_name)
 }
 
-pub fn sqlite3_name_from_token<'a>(db: &SQLite3, p_name: &'a Token) -> &'a str {
+pub fn sqlite3_name_from_token<'a>(_db: &SQLite3, p_name: &'a Token) -> &'a str {
   sqlite3_dequote(p_name.text)
 }
 
-pub fn sqlite3_dequote<'a>(z_name: &'a str) -> &'a str {
+pub fn sqlite3_dequote(z_name: &str) -> &str {
   let mut chrs = z_name.chars();
-  let mut q: Option<char> = chrs.nth(0);
+  let mut q: Option<char> = chrs.next();
 
   if let Some(quote) = q.as_mut() {
     if matches!(quote, '\'' | '[' | '"' | '`') {

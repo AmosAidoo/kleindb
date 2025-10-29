@@ -26,7 +26,7 @@ pub enum SetList<'a> {
 }
 
 pub fn parse_update<'a>(
-  p_parse: Arc<Mutex<Parse<'a>>>,
+  _p_parse: Arc<Mutex<Parse<'a>>>,
 ) -> impl Parser<'a, &'a [Token<'a>], Update<'a>, extra::Err<KleinDBParserError<'a>>> + Clone {
   let expr = parse_expr().padded_by(whitespace().repeated());
   let nm = parse_name();
@@ -59,7 +59,7 @@ pub fn parse_update<'a>(
     .then(parse_from())
     .then(where_opt_ret().padded_by(whitespace().repeated()))
     .map(
-      |(((name, setlst), _from), where_clause): (
+      |(((name, _setlst), _from), where_clause): (
         ((SrcList, SetList<'_>), Token<'_>),
         WhereOptRet<'_>,
       )| {
