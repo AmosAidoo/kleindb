@@ -381,14 +381,17 @@ mod tests {
           ExprListItem {
             p_expr: Expr::Integer(1),
             const_expr_reg: None,
+            name: None,
           },
           ExprListItem {
             p_expr: Expr::Integer(2),
             const_expr_reg: None,
+            name: None,
           },
           ExprListItem {
             p_expr: Expr::Integer(3),
             const_expr_reg: None,
+            name: None,
           },
         ],
       },

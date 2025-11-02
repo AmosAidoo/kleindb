@@ -31,6 +31,7 @@ fn parse_selcollist<'a>()
           acc.items.push(ExprListItem {
             p_expr: curr,
             const_expr_reg: None,
+            name: None,
           });
           acc
         })

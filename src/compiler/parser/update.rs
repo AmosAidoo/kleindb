@@ -2,7 +2,7 @@ use crate::{
   Parse, Token, TokenType,
   compiler::parser::{
     KleinDBParserError, SrcList, WhereOptRet,
-    expression::{Expr, ExprList, parse_expr},
+    expression::{Expr, ExprList, ExprListItem, parse_expr},
     match_token, parse_from, parse_name, where_opt_ret, whitespace, xfullname,
   },
 };
@@ -59,13 +59,15 @@ pub fn parse_update<'a>(
     .then(parse_from())
     .then(where_opt_ret().padded_by(whitespace().repeated()))
     .map(
-      |(((name, _setlst), _from), where_clause): (
+      |(((name, setlst), _from), where_clause): (
         ((SrcList, SetList<'_>), Token<'_>),
         WhereOptRet<'_>,
       )| {
+        let mut items = vec![];
+        unwrap_setlist(setlst, &mut items);
         Update {
           table_name: name,
-          changes: ExprList { items: vec![] },
+          changes: ExprList { items },
           where_expr: match where_clause {
             WhereOptRet::Empty => None,
             WhereOptRet::WhereExpr(expr) => Some(expr),
@@ -74,4 +76,25 @@ pub fn parse_update<'a>(
         }
       },
     )
+}
+
+fn unwrap_setlist<'a>(setlist: SetList<'a>, items: &mut Vec<ExprListItem<'a>>) {
+  match setlist {
+    SetList::SingleAssignment { name, expr } => {
+      items.push(ExprListItem {
+        name: Some(name.text),
+        p_expr: expr,
+        const_expr_reg: None,
+      });
+    }
+    SetList::Assignment(left, right) => {
+      // Expand left
+      unwrap_setlist(*left, items);
+
+      // Expand right
+      if let Some(tail) = right {
+        unwrap_setlist(*tail, items);
+      }
+    }
+  };
 }
