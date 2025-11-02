@@ -10,6 +10,7 @@ use chumsky::prelude::*;
 #[derive(Debug, PartialEq, Clone)]
 pub enum Expr<'a> {
   Null,
+  Id(&'a str),
   Float(f64),
   Blob(&'a str),
   Integer(i32),
@@ -62,6 +63,7 @@ impl<'a> Expr<'a> {
     let item = ExprListItem {
       p_expr: self.clone(),
       const_expr_reg: Some(reg_dest),
+      name: None,
     };
     if p_parse.const_expr.is_none() {
       let mut res = ExprList { items: vec![] };
@@ -85,6 +87,8 @@ pub struct ExprListItem<'a> {
   pub p_expr: Expr<'a>,
 
   pub const_expr_reg: Option<i32>,
+
+  pub name: Option<&'a str>,
 }
 
 /// A list of expressions.  Each expression may optionally have a
@@ -101,13 +105,14 @@ pub fn parse_expr<'a>()
   recursive(|expr| {
     let any_term = |tt: TokenType| any().filter(move |t: &Token| t.token_type == tt);
 
+    let id = any_term(TokenType::Id).map(|t| Expr::Id(t.text));
     let null = any_term(TokenType::NULL).map(|_| Expr::<'a>::Null);
     let float = any_term(TokenType::Float).map(|t| Expr::Float(t.text.parse().unwrap()));
     let blob = any_term(TokenType::Blob).map(|t| Expr::Blob(t.text));
     let integer = any_term(TokenType::Integer).map(|t| Expr::Integer(t.text.parse().unwrap()));
     let string = any_term(TokenType::String).map(|t| Expr::String(t.text));
 
-    let term = choice((null, float, blob, string, integer));
+    let term = choice((null, float, blob, string, integer, id));
 
     let atom = term
       .or(expr.delimited_by(
