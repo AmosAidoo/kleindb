@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::KleinDBError;
+use crate::error::KleinDBError;
 
 #[derive(Debug)]
 pub struct Pager {

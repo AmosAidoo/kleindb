@@ -1,104 +1,22 @@
-use crate::{SQLITE_DIGIT_SEPARATOR, Token, TokenType, is_id_char};
+use crate::compiler::tokenizer::{
+  character_class::{AI_CLASS, CharacterClass},
+  token_type::TokenType,
+};
 
-// Character classes for tokenizing
-enum CharacterClasses {
-  /// The letter 'x', or start of BLOB literal
-  X,
-  /// First letter of a keyword
-  Kywd0,
-  /// Alphabetics or '_'.  Usable in a keyword
-  Kywd,
-  /// Digits
-  Digit,
-  /// '$'
-  Dollar,
-  /// '@', '#', ':'.  Alphabetic SQL variables
-  VarAlpha,
-  /// '?'.  Numeric SQL variables
-  VarNum,
-  Space,
-  Quote,
-  Quote2,
-  Pipe,
-  Minus,
-  Lt,
-  Gt,
-  Eq,
-  Bang,
-  Slash,
-  LeftParen,
-  RightParen,
-  Semi,
-  Plus,
-  Star,
-  Percent,
-  Comma,
-  And,
-  Tilda,
-
-  Dot,
-  /// unicode characters usable in IDs
-  Id,
-  /// Illegal character
-  Illegal,
-  // 0x00
-  Nul,
-  /// First byte of UTF8 BOM:  0xEF 0xBB 0xBF
-  Bom,
+#[derive(Debug, PartialEq, Clone)]
+/// Each token coming out of the lexer is an instance of this structure
+pub struct Token<'a> {
+  pub text: &'a str,
+  pub token_type: TokenType,
 }
 
-impl From<u8> for CharacterClasses {
-  fn from(value: u8) -> Self {
-    match value {
-      0 => Self::X,
-      1 => Self::Kywd0,
-      2 => Self::Kywd,
-      3 => Self::Digit,
-      4 => Self::Dollar,
-      5 => Self::VarAlpha,
-      6 => Self::VarNum,
-      7 => Self::Space,
-      8 => Self::Quote,
-      9 => Self::Quote2,
-      10 => Self::Pipe,
-      11 => Self::Minus,
-      12 => Self::Lt,
-      13 => Self::Gt,
-      14 => Self::Eq,
-      15 => Self::Bang,
-      16 => Self::Slash,
-      17 => Self::LeftParen,
-      18 => Self::RightParen,
-      19 => Self::Semi,
-      20 => Self::Plus,
-      21 => Self::Star,
-      22 => Self::Percent,
-      23 => Self::Comma,
-      24 => Self::And,
-      25 => Self::Tilda,
-      26 => Self::Dot,
-      27 => Self::Id,
-      28 => Self::Illegal,
-      29 => Self::Nul,
-      _ => Self::Bom,
-    }
+impl<'a> Token<'a> {
+  pub fn is_semi(&self) -> bool {
+    self.token_type == TokenType::Semi
   }
 }
 
-/// To speed up lookup of character class given initial
-/// character
-const AI_CLASS: [u8; 256] = [
-  29, 28, 28, 28, 28, 28, 28, 28, 28, 7, 7, 28, 7, 7, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28,
-  28, 28, 28, 28, 28, 28, 28, 7, 15, 8, 5, 4, 22, 24, 8, 17, 18, 21, 20, 23, 11, 26, 16, 3, 3, 3,
-  3, 3, 3, 3, 3, 3, 3, 5, 19, 12, 14, 13, 6, 5, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-  1, 1, 1, 1, 1, 1, 0, 2, 2, 9, 28, 28, 28, 2, 8, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-  1, 1, 1, 1, 1, 1, 1, 0, 2, 2, 28, 10, 28, 25, 28, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27,
-  27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27,
-  27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27,
-  27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27,
-  27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27,
-  27, 27, 27, 30, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27, 27,
-];
+const SQLITE_DIGIT_SEPARATOR: u8 = b'_';
 
 pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
   let mut tokens: Vec<Token> = vec![];
@@ -106,10 +24,10 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
   let n = sql.len();
   let sql_bytes: Vec<u8> = sql.bytes().collect();
   while i < n {
-    let cc: CharacterClasses = AI_CLASS[sql_bytes[i] as usize].into();
+    let cc: CharacterClass = AI_CLASS[sql_bytes[i] as usize].into();
 
     match cc {
-      CharacterClasses::Space => {
+      CharacterClass::Space => {
         // matches!(z, b' ' | b'\t' | b'\n' | 0x0c | b'\r');
         let prev = i;
         while i < n && sql_bytes[i].is_ascii_whitespace() {
@@ -120,7 +38,7 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
           token_type: TokenType::Space,
         });
       }
-      CharacterClasses::Minus => {
+      CharacterClass::Minus => {
         if sql_bytes[i + 1] == b'-' {
           let prev = i;
           i += 2;
@@ -146,42 +64,42 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
           i += 1;
         }
       }
-      CharacterClasses::LeftParen => {
+      CharacterClass::LeftParen => {
         tokens.push(Token {
           text: &sql[i..i + 1],
           token_type: TokenType::LeftParen,
         });
         i += 1;
       }
-      CharacterClasses::RightParen => {
+      CharacterClass::RightParen => {
         tokens.push(Token {
           text: &sql[i..i + 1],
           token_type: TokenType::RightParen,
         });
         i += 1;
       }
-      CharacterClasses::Semi => {
+      CharacterClass::Semi => {
         tokens.push(Token {
           text: &sql[i..i + 1],
           token_type: TokenType::Semi,
         });
         i += 1;
       }
-      CharacterClasses::Plus => {
+      CharacterClass::Plus => {
         tokens.push(Token {
           text: &sql[i..i + 1],
           token_type: TokenType::Plus,
         });
         i += 1;
       }
-      CharacterClasses::Star => {
+      CharacterClass::Star => {
         tokens.push(Token {
           text: &sql[i..i + 1],
           token_type: TokenType::Star,
         });
         i += 1;
       }
-      CharacterClasses::Slash => {
+      CharacterClass::Slash => {
         let prev = i;
         if sql_bytes[i + 1] != b'*' || i + 2 >= n {
           tokens.push(Token {
@@ -206,13 +124,13 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
           token_type: TokenType::Comment,
         });
       }
-      CharacterClasses::Percent => {
+      CharacterClass::Percent => {
         tokens.push(Token {
           text: &sql[i..i + 1],
           token_type: TokenType::Rem,
         });
       }
-      CharacterClasses::Eq => {
+      CharacterClass::Eq => {
         let prev = i;
         if sql_bytes[i + 1] == b'=' {
           i += 1;
@@ -223,7 +141,7 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
         });
         i += 1;
       }
-      CharacterClasses::Lt => {
+      CharacterClass::Lt => {
         let token_type = match sql_bytes[i + 1] {
           b'=' => TokenType::LE,
           b'>' => TokenType::NE,
@@ -252,7 +170,7 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
 
         tokens.push(token);
       }
-      CharacterClasses::Gt => {
+      CharacterClass::Gt => {
         let token_type = match sql_bytes[i + 1] {
           b'=' => TokenType::GE,
           b'>' => TokenType::RShift,
@@ -280,7 +198,7 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
 
         tokens.push(token);
       }
-      CharacterClasses::Bang => {
+      CharacterClass::Bang => {
         if sql_bytes[i + 1] != b'=' {
           tokens.push(Token {
             text: &sql[i..i + 1],
@@ -295,7 +213,7 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
           i += 2;
         }
       }
-      CharacterClasses::Pipe => {
+      CharacterClass::Pipe => {
         if sql_bytes[i + 1] != b'|' {
           tokens.push(Token {
             text: &sql[i..i + 1],
@@ -310,28 +228,28 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
           i += 2;
         }
       }
-      CharacterClasses::Comma => {
+      CharacterClass::Comma => {
         tokens.push(Token {
           text: &sql[i..i + 1],
           token_type: TokenType::Comma,
         });
         i += 1;
       }
-      CharacterClasses::And => {
+      CharacterClass::And => {
         tokens.push(Token {
           text: &sql[i..i + 1],
           token_type: TokenType::BitAnd,
         });
         i += 1;
       }
-      CharacterClasses::Tilda => {
+      CharacterClass::Tilda => {
         tokens.push(Token {
           text: &sql[i..i + 1],
           token_type: TokenType::BitNot,
         });
         i += 1;
       }
-      CharacterClasses::Quote => {
+      CharacterClass::Quote => {
         let prev = i;
         let delim = sql_bytes[i];
         // assert!(matches!(delim, b'`' | b'\'' | b'"'));
@@ -368,7 +286,7 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
           i += 1;
         }
       }
-      CharacterClasses::Dot => {
+      CharacterClass::Dot => {
         if !sql_bytes[i + 1].is_ascii_digit() {
           tokens.push(Token {
             text: &sql[i..i + 1],
@@ -419,7 +337,7 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
           });
         }
       }
-      CharacterClasses::Digit => {
+      CharacterClass::Digit => {
         let mut token_type = TokenType::Integer;
         let prev = i;
         if sql_bytes[i] == b'0'
@@ -452,7 +370,7 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
           }
 
           // Float
-          // Same code as CharacterClasses::Dot float part above
+          // Same code as CharacterClass::Dot float part above
           if sql_bytes[i] == b'.' {
             i += 1;
             while i < n {
@@ -495,7 +413,7 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
           token_type,
         });
       }
-      CharacterClasses::Quote2 => {
+      CharacterClass::Quote2 => {
         let prev = i;
         let mut c = sql_bytes[i];
         while c != b']' && i + 1 < n {
@@ -512,7 +430,7 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
           token_type,
         });
       }
-      CharacterClasses::VarNum => {
+      CharacterClass::VarNum => {
         let token_type = TokenType::Variable;
         let prev = i;
         while i < n && sql_bytes[i].is_ascii_digit() {
@@ -523,7 +441,7 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
           token_type,
         });
       }
-      CharacterClasses::Dollar | CharacterClasses::VarAlpha => {
+      CharacterClass::Dollar | CharacterClass::VarAlpha => {
         let mut token_type = TokenType::Variable;
         let prev = 0;
         let mut c = sql_bytes[i];
@@ -549,8 +467,8 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
           token_type,
         });
       }
-      CharacterClasses::Kywd0 => {
-        if AI_CLASS[sql_bytes[i + 1] as usize] > CharacterClasses::Kywd0 as u8 {
+      CharacterClass::Kywd0 => {
+        if AI_CLASS[sql_bytes[i + 1] as usize] > CharacterClass::Kywd0 as u8 {
           let prev = i;
           i += 1;
           while i < n && is_id_char(sql_bytes[i]) {
@@ -563,7 +481,7 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
         } else {
           let prev = i;
           i += 2;
-          while i < n && AI_CLASS[sql_bytes[i] as usize] <= CharacterClasses::Kywd0 as u8 {
+          while i < n && AI_CLASS[sql_bytes[i] as usize] <= CharacterClass::Kywd0 as u8 {
             i += 1;
           }
 
@@ -586,7 +504,7 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
           }
         }
       }
-      CharacterClasses::X => {
+      CharacterClass::X => {
         let prev = i;
         if sql_bytes[i + 1] == b'\'' {
           let mut token_type = TokenType::Blob;
@@ -622,7 +540,7 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
           });
         }
       }
-      CharacterClasses::Kywd | CharacterClasses::Id => {
+      CharacterClass::Kywd | CharacterClass::Id => {
         let prev = i;
         i += 1;
         while i < n && is_id_char(sql_bytes[i]) {
@@ -633,7 +551,7 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
           token_type: TokenType::Id,
         });
       }
-      CharacterClasses::Bom => {
+      CharacterClass::Bom => {
         if sql_bytes[i + 1] == 0xbb && sql_bytes[i + 2] == 0xbf {
           tokens.push(Token {
             text: &sql[i..i + 3],
@@ -652,7 +570,7 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
           });
         }
       }
-      CharacterClasses::Nul => {
+      CharacterClass::Nul => {
         // Take a closer look
         tokens.push(Token {
           text: &sql[i..i + 1],
@@ -671,6 +589,11 @@ pub fn tokenize<'a>(sql: &'a str) -> Vec<Token<'a>> {
   }
 
   tokens
+}
+
+fn is_id_char(ch: u8) -> bool {
+  // Identifiers are alphanumerics, "_", "$", and any non-ASCII UTF character.
+  matches!(ch, b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'$' | b'_' | 128..=255)
 }
 
 fn get_keyword_token_type(text: &str) -> TokenType {

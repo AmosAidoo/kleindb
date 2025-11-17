@@ -1,7 +1,3 @@
-use crate::Parse;
-use crate::Schema;
-use crate::Token;
-use crate::TokenType;
 use crate::compiler::parser::Affinity;
 use crate::compiler::parser::Column;
 use crate::compiler::parser::ColumnDataType;
@@ -9,7 +5,11 @@ use crate::compiler::parser::KleinDBParserError;
 use crate::compiler::parser::parse_dbnm;
 use crate::compiler::parser::parse_name;
 use crate::compiler::parser::whitespace;
-use crate::sqlite3_name_from_token;
+use crate::compiler::tokenizer::token::Token;
+use crate::compiler::tokenizer::token_type::TokenType;
+use crate::core::db::Schema;
+use crate::core::db::sqlite3_name_from_token;
+use crate::core::parse::Parse;
 use chumsky::Parser;
 use chumsky::prelude::*;
 use std::sync::{Arc, Mutex};
@@ -122,7 +122,7 @@ fn parse_create_table_start<'a>(
           )
         } else {
           let tp_res = parse.sqlite3_two_part_name(&p_name1, &p_name2).unwrap();
-          (tp_res.1, sqlite3_name_from_token(db, tp_res.0), None)
+          (tp_res.1, sqlite3_name_from_token(tp_res.0), None)
         };
 
         parse.s_name_token = p_name;

@@ -1,9 +1,10 @@
 use crate::{
-  Parse, Token, TokenType,
   compiler::{
     codegen::sqlite3_expr_code_target,
     parser::{KleinDBParserError, match_token, whitespace},
+    tokenizer::{token::Token, token_type::TokenType},
   },
+  core::parse::Parse,
 };
 use chumsky::prelude::*;
 
