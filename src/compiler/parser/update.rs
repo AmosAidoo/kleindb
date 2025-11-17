@@ -1,10 +1,13 @@
 use crate::{
-  Parse, Token, TokenType,
-  compiler::parser::{
-    KleinDBParserError, SrcList, WhereOptRet,
-    expression::{Expr, ExprList, ExprListItem, parse_expr},
-    match_token, parse_from, parse_name, where_opt_ret, whitespace, xfullname,
+  compiler::{
+    parser::{
+      KleinDBParserError, SrcList, WhereOptRet,
+      expression::{Expr, ExprList, ExprListItem, parse_expr},
+      match_token, parse_from, parse_name, where_opt_ret, whitespace, xfullname,
+    },
+    tokenizer::{token::Token, token_type::TokenType},
   },
+  core::parse::Parse,
 };
 use chumsky::prelude::*;
 use std::sync::{Arc, Mutex};

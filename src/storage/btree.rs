@@ -1,6 +1,10 @@
 use std::sync::Arc;
 
-use crate::{KleinDBError, SQLite3, Schema, storage::pager::Pager};
+use crate::{
+  core::db::{SQLite3, Schema},
+  error::KleinDBError,
+  storage::pager::Pager,
+};
 
 #[derive(Debug)]
 #[allow(dead_code)]

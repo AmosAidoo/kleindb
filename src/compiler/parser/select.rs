@@ -1,10 +1,10 @@
-use crate::{
-  Token, TokenType,
-  compiler::parser::{
+use crate::compiler::{
+  parser::{
     KleinDBParserError,
     expression::{ExprList, ExprListItem, parse_expr},
     whitespace,
   },
+  tokenizer::{token::Token, token_type::TokenType},
 };
 use chumsky::prelude::*;
 

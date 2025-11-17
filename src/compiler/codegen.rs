@@ -1,5 +1,4 @@
 use crate::{
-  OpFlags, Opcode, P4Type, Parse, SCHEMA_ROOT, SelectDest, SelectResultType, TextEncodings,
   compiler::parser::{
     Cmd, SQLCmdList,
     create_table::Table,
@@ -7,8 +6,47 @@ use crate::{
     select::Select,
     sqlite3_finish_coding,
   },
+  core::parse::Parse,
   storage::btree::{BtreeConstants, BtreeCreateTableFlags},
+  vdbe::op::{OpFlags, Opcode, P4Type},
 };
+
+const SCHEMA_ROOT: i32 = 1;
+
+enum TextEncodings {
+  Utf8 = 1,
+}
+
+pub enum SelectResultType {
+  Union = 1,
+  Except,
+  Exists,
+  Discard,
+  DistFifo,
+  DistQueue,
+
+  Queue,
+  Fifo,
+
+  /// Output each row of result
+  Output,
+  Mem,
+  Set,
+  EphemTab,
+  Coroutine,
+  Table,
+  Upfrom,
+}
+
+/// An instance of this object describes where to put of the results of
+/// a SELECT statement.
+pub struct SelectDest {
+  pub e_dest: SelectResultType,
+  /// Base register where results are written
+  pub i_sdst: usize,
+  /// Number of registers allocated
+  pub n_sdst: usize,
+}
 
 /// Generate an instruction that will put the integer describe by
 /// text z[0..n-1] into register iMem.

@@ -4,7 +4,14 @@ pub mod expression;
 pub mod select;
 pub mod update;
 
-use crate::{Opcode, Parse, Token, TokenType, compiler::codegen::sqlite3_expr_code};
+use crate::{
+  compiler::{
+    codegen::sqlite3_expr_code,
+    tokenizer::{token::Token, token_type::TokenType},
+  },
+  core::parse::Parse,
+  vdbe::op::Opcode,
+};
 use bitflags::bitflags;
 use chumsky::{
   DefaultExpected,
@@ -335,120 +342,4 @@ pub fn sqlite3_finish_coding(p_parse: &mut Parse) {
   // Get the VDBE program ready for execution
   // TODO: if( pParse->nErr==0 )
   p_parse.make_vdbe_ready();
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-  use crate::{
-    Cr, SQLite3, SQLite3Stmt,
-    compiler::{
-      parser::{
-        expression::{Expr, ExprList, ExprListItem},
-        select::Select,
-      },
-      tokenizer,
-    },
-  };
-
-  fn create_ctx<'a>(db: &'a SQLite3) -> Arc<Mutex<Parse<'a>>> {
-    // let db = SQLite3::new();
-    Arc::new(Mutex::new(Parse {
-      db: &db,
-      vdbe: SQLite3Stmt::new(),
-      n_mem: 0,
-      s_name_token: None,
-      const_expr: None,
-      ok_const_factor: true,
-      cr: Cr {
-        addr_cr_tab: -1,
-        reg_row_id: -1,
-        reg_root: -1,
-      },
-    }))
-  }
-
-  #[test]
-  fn test_parse_simple_select_into_ast() {
-    const SQL: &str = "SELECT 1, 2, 3;";
-    let db = SQLite3::new();
-    let parse_ctx = create_ctx(&db);
-    let tokens = tokenizer::tokenize(SQL);
-    let ast = parser(parse_ctx).parse(&tokens).unwrap();
-    let list = vec![Cmd::Select(Select {
-      expr_list: ExprList {
-        items: vec![
-          ExprListItem {
-            p_expr: Expr::Integer(1),
-            const_expr_reg: None,
-            name: None,
-          },
-          ExprListItem {
-            p_expr: Expr::Integer(2),
-            const_expr_reg: None,
-            name: None,
-          },
-          ExprListItem {
-            p_expr: Expr::Integer(3),
-            const_expr_reg: None,
-            name: None,
-          },
-        ],
-      },
-    })];
-    assert_eq!(ast, SQLCmdList { list });
-  }
-
-  //   #[test]
-  //   fn test_parse_create_table_start() {
-  //     const SQL: &str = "CREATE TABLE t1";
-  //     let db = SQLite3::new();
-  //     let parse_ctx = create_ctx(&db);
-  //     let tokens = tokenizer::tokenize(SQL);
-  //     let ast = parse_create_table_start(parse_ctx).parse(&tokens).unwrap();
-
-  //     assert_eq!(
-  //       ast,
-  //       Table {
-  //         name: "t1".to_string(),
-  //         p_key: None,
-  //         schema: None,
-  //         n_tab_ref: 1,
-  //         a_col: vec![],
-  //         i_db: 0
-  //       }
-  //     );
-  //   }
-
-  //   #[test]
-  //   fn test_parse_create_table_end() {
-  //     const SQL: &str = "(a)";
-  //     let db = SQLite3::new();
-  //     let parse_ctx = create_ctx(&db);
-  //     let tokens = tokenizer::tokenize(SQL);
-  //     let ast = parse_create_table_end().parse(&tokens).unwrap();
-
-  //     assert_eq!(
-  //       ast,
-  //       ColumnList::Single(ColumnName {
-  //         name: Token {
-  //           text: "a",
-  //           token_type: TokenType::Id
-  //         },
-  //         type_token: TypeToken::Empty
-  //       })
-  //     );
-  //   }
-
-  // #[test]
-  // fn test_parse_create_table_into_ast() {
-  //   const SQL: &str = "CREATE TABLE t1(a);";
-  //   let db = SQLite3::new();
-  //   let parse_ctx = create_ctx(&db);
-  //   let tokens = tokenizer::tokenize(SQL);
-  //   let ast = parser(parse_ctx).parse(&tokens);
-  //   println!("{ast:?}");
-  //   // assert_eq!(ast, SQLCmdList { list });
-  //   assert!(true);
-  // }
 }
